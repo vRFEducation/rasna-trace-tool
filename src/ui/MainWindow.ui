@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>MainWindow</class>
+ <widget class="QMainWindow" name="MainWindow">
+  <property name="geometry"><rect><x>0</x><y>0</y><width>1280</width><height>720</height></rect></property>
+  <property name="windowTitle"><string>Ronia Trace Tool</string></property>
+  <widget class="QWidget" name="centralwidget">
+   <layout class="QVBoxLayout" name="rootLayout">
+    <item>
+     <layout class="QHBoxLayout" name="toolbarRow">
+      <item><widget class="QPushButton" name="btnOpenProject"><property name="text"><string>Open Project…</string></property></widget></item>
+      <item><widget class="QPushButton" name="btnDetectMethods"><property name="text"><string>Detect Methods</string></property><property name="enabled"><bool>false</bool></property></widget></item>
+      <item><widget class="QPushButton" name="btnApplyTrace"><property name="text"><string>Apply TRACE_FN</string></property><property name="enabled"><bool>false</bool></property></widget></item>
+      <item><spacer><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>40</width><height>20</height></size></property></spacer></item>
+     </layout>
+    </item>
+    <item>
+     <widget class="QSplitter" name="splitter">
+      <property name="orientation"><enum>Qt::Horizontal</enum></property>
+      <widget class="QGroupBox" name="grpProject">
+       <property name="title"><string>Project</string></property>
+       <layout class="QVBoxLayout"><item><widget class="QTreeView" name="treeProject"/></item></layout>
+      </widget>
+      <widget class="QGroupBox" name="grpPreview">
+       <property name="title"><string>Preview</string></property>
+       <layout class="QVBoxLayout"><item><widget class="QPlainTextEdit" name="txtPreview"><property name="readOnly"><bool>true</bool></property></widget></item></layout>
+      </widget>
+      <widget class="QGroupBox" name="grpMethods">
+       <property name="title"><string>Methods</string></property>
+       <layout class="QVBoxLayout"><item><widget class="QTableView" name="tblMethods"/></item></layout>
+      </widget>
+     </widget>
+    </item>
+   </layout>
+  </widget>
+  <widget class="QStatusBar" name="statusbar">
+   <widget class="QProgressBar" name="progressBar">
+    <property name="maximumSize"><size><width>200</width><height>16777215</height></size></property>
+    <property name="visible"><bool>false</bool></property>
+   </widget>
+  </widget>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>
