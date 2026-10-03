@@ -8,6 +8,7 @@
 
 #include <QFileDialog>
 #include <QStandardItemModel>
+#include <QRegularExpression>
 #include <QFile>
 #include <QTextStream>
 #include <QMessageBox>
@@ -15,6 +16,9 @@
 #include <QFileInfo>
 #include <QTextEdit>
 #include <QTextBlock>
+
+#include <core/EditApplier.h>
+#include <core/EditPlanner.h>
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent), ui(new Ui::MainWindow) {
@@ -143,14 +147,6 @@ void MainWindow::populateMethodTable(const QVector<FunctionInfo>& fns) {
     ui->tblMethods->resizeColumnsToContents();
 }
 
-void MainWindow::onApplyTrace() {
-    // Placeholder — EditPlanner/Applier arrives in the next step.
-    QMessageBox::information(this, "Next step",
-        QString("Would insert TRACE_FN() into %1 method bodies.\n"
-                "EditPlan + diff preview + apply will be implemented next.")
-            .arg(m_currentFunctions.size()));
-}
-
 void MainWindow::setStatus(const QString& text) {
     statusBar()->showMessage(text);
 }
@@ -196,4 +192,95 @@ void MainWindow::highlightMethodRange(const FunctionInfo& fn) {
     }
 
     ui->txtPreview->setExtraSelections(sels);
+}
+
+
+void MainWindow::onApplyTrace() {
+    if (m_currentFile.isEmpty()) return;
+
+    const QString suffix = QFileInfo(m_currentFile).suffix().toLower();
+
+    // Phase-1: we plan for the current file (headers or cpp) and, if it's
+    // a cpp, also the paired header for in-header bodies.
+    QStringList filesToPlan;
+    filesToPlan << m_currentFile;
+    if (suffix == "cpp" || suffix == "cc" || suffix == "cxx") {
+        QString h = m_currentFile;
+        h.replace(QRegularExpression("\\.(cpp|cc|cxx)$"), ".h");
+        if (QFile::exists(h)) filesToPlan << h;
+    }
+
+    QVector<DiffPreviewDialog::FilePlan> plans;
+    EditPlanner::Options opts;   // defaults are fine
+
+    for (const QString& file : filesToPlan) {
+        QFile f(file);
+        if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) continue;
+        QTextStream ts(&f);
+        QStringList lines;
+        while (!ts.atEnd()) lines << ts.readLine();
+        f.close();
+
+        // parse
+        QVector<FunctionInfo> fns;
+        const QString sfx = QFileInfo(file).suffix().toLower();
+        if (sfx == "h" || sfx == "hpp" || sfx == "hxx") {
+            HeaderParser parser;
+            fns = parser.parseFile(file);
+        } else {
+            QString h = file;
+            h.replace(QRegularExpression("\\.(cpp|cc|cxx)$"), ".h");
+            if (QFile::exists(h)) {
+                HeaderParser parser;
+                const auto decls = parser.parseFile(h);
+                CppImplFinder finder;
+                fns = finder.findImplementations(file, decls);
+            }
+        }
+
+        const auto edits = EditPlanner::plan(file, lines, fns, opts);
+        if (edits.isEmpty()) continue;
+
+        DiffPreviewDialog::FilePlan p;
+        p.filePath      = file;
+        p.originalLines = lines;
+        p.edits         = edits;
+        plans.push_back(p);
+    }
+
+    if (plans.isEmpty()) {
+        QMessageBox::information(this, "Nothing to do",
+            "No functions require instrumentation in this file.");
+        return;
+    }
+
+    DiffPreviewDialog dlg(this);
+    dlg.setPlans(plans);
+    if (dlg.exec() != QDialog::Accepted) return;
+
+    const auto selected = dlg.selectedPlans();
+    int okCount = 0, failCount = 0;
+    QStringList errors;
+    for (const auto& p : selected) {
+        QString err;
+        if (EditApplier::applyToFile(p.filePath, p.edits, &err)) {
+            ++okCount;
+        } else {
+            ++failCount;
+            errors << QString("%1: %2").arg(QFileInfo(p.filePath).fileName(), err);
+        }
+    }
+
+    if (failCount == 0) {
+        QMessageBox::information(this, "Done",
+            QString("Instrumented %1 file(s).").arg(okCount));
+    } else {
+        QMessageBox::warning(this, "Partially applied",
+            QString("Succeeded: %1\nFailed: %2\n\n%3")
+                .arg(okCount).arg(failCount).arg(errors.join('\n')));
+    }
+
+    // Refresh preview of the currently open file
+    showFileInPreview(m_currentFile);
+    onDetectMethods();
 }

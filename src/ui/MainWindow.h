@@ -5,6 +5,8 @@
 #include <QTextEdit>
 #include "CppSyntaxHighlighter.h"
 #include "core/FunctionInfo.h"
+#include "core/TextEdit.h"
+#include "DiffPreviewDialog.h"
 
 QT_BEGIN_NAMESPACE
 namespace Ui { class MainWindow; }
@@ -41,5 +43,9 @@ private:
     CppSyntaxHighlighter* m_highlighter = nullptr;
     QVector<QTextEdit::ExtraSelection> m_selections; // not strictly needed
     void highlightMethodRange(const FunctionInfo& fn);
+
+    void runApplyTrace();
+    void applyPlanToProject(const QVector<DiffPreviewDialog::FilePlan>& plans);
+
 
 };
