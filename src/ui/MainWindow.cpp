@@ -13,11 +13,15 @@
 #include <QMessageBox>
 #include <QHeaderView>
 #include <QFileInfo>
+#include <QTextEdit>
+#include <QTextBlock>
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent), ui(new Ui::MainWindow) {
     ui->setupUi(this);
 
+    m_highlighter = new CppSyntaxHighlighter(ui->txtPreview->document(),
+                                         CppSyntaxHighlighter::Mode::Cpp);
     m_projectModel = new QStandardItemModel(this);
     m_projectModel->setHorizontalHeaderLabels({ "File" });
     ui->treeProject->setModel(m_projectModel);
@@ -33,6 +37,12 @@ MainWindow::MainWindow(QWidget* parent)
     connect(ui->btnApplyTrace,    &QPushButton::clicked, this, &MainWindow::onApplyTrace);
     connect(ui->treeProject->selectionModel(), &QItemSelectionModel::currentChanged,
             this, &MainWindow::onFileSelected);
+    connect(ui->tblMethods->selectionModel(), &QItemSelectionModel::currentRowChanged,
+        this, [this](const QModelIndex& cur, const QModelIndex&) {
+            if (!cur.isValid()) return;
+            highlightMethodRange(m_fnModel->at(cur.row()));
+        });
+
 
     setStatus(QStringLiteral("Ready. Open a project to begin."));
 }
@@ -86,10 +96,18 @@ void MainWindow::onFileSelected(const QModelIndex& idx) {
 }
 
 void MainWindow::showFileInPreview(const QString& path) {
+    delete m_highlighter;
+const bool qml = path.endsWith(".qml", Qt::CaseInsensitive);
+m_highlighter = new CppSyntaxHighlighter(
+    ui->txtPreview->document(),
+    qml ? CppSyntaxHighlighter::Mode::Qml : CppSyntaxHighlighter::Mode::Cpp);
+
     QFile f(path);
     if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) return;
     QTextStream ts(&f);
     ui->txtPreview->setPlainText(ts.readAll());
+    ui->txtPreview->setExtraSelections({});
+
 }
 
 void MainWindow::onDetectMethods() {
@@ -135,4 +153,47 @@ void MainWindow::onApplyTrace() {
 
 void MainWindow::setStatus(const QString& text) {
     statusBar()->showMessage(text);
+}
+
+void MainWindow::highlightMethodRange(const FunctionInfo& fn) {
+    QList<QTextEdit::ExtraSelection> sels;
+
+    if (fn.openBraceLine > 0 && fn.closeBraceLine >= fn.openBraceLine) {
+        QTextCursor cur(ui->txtPreview->document());
+
+        // Move to start of openBraceLine (1-based -> 0-based block)
+        QTextBlock openBlock = ui->txtPreview->document()->findBlockByNumber(fn.openBraceLine - 1);
+        QTextBlock closeBlock = ui->txtPreview->document()->findBlockByNumber(fn.closeBraceLine - 1);
+
+        if (openBlock.isValid() && closeBlock.isValid()) {
+            cur.setPosition(openBlock.position());
+            cur.setPosition(closeBlock.position() + closeBlock.length() - 1,
+                            QTextCursor::KeepAnchor);
+
+            QTextEdit::ExtraSelection sel;
+            sel.cursor = cur;
+            sel.format.setBackground(QColor(58, 110, 165, 60));   // light blue, translucent
+            sel.format.setProperty(QTextFormat::FullWidthSelection, false);
+            sels.append(sel);
+
+            // Bonus: keep a second selection on the signature line so it's easy to see the header
+            QTextCursor sigCur(ui->txtPreview->document());
+            QTextBlock sigBlock = ui->txtPreview->document()->findBlockByNumber(fn.signatureLine - 1);
+            if (sigBlock.isValid()) {
+                sigCur.setPosition(sigBlock.position());
+                sigCur.setPosition(sigBlock.position() + sigBlock.length() - 1,
+                                   QTextCursor::KeepAnchor);
+                QTextEdit::ExtraSelection sigSel;
+                sigSel.cursor = sigCur;
+                sigSel.format.setBackground(QColor(58, 110, 165, 110));
+                sels.append(sigSel);
+            }
+
+            // Scroll to the signature
+            ui->txtPreview->setTextCursor(sigCur);
+            ui->txtPreview->centerCursor();
+        }
+    }
+
+    ui->txtPreview->setExtraSelections(sels);
 }

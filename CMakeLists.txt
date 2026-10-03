@@ -18,6 +18,7 @@ add_executable(RoniaTraceTool
     src/ui/MainWindow.cpp
     src/ui/MainWindow.ui
     src/ui/FunctionTableModel.cpp
+    src/ui/CppSyntaxHighlighter.cpp
     resources/style.qss
 )
 

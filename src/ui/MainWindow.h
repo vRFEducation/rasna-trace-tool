@@ -2,6 +2,8 @@
 #pragma once
 #include <QMainWindow>
 #include <QFileSystemModel>
+#include <QTextEdit>
+#include "CppSyntaxHighlighter.h"
 #include "core/FunctionInfo.h"
 
 QT_BEGIN_NAMESPACE
@@ -35,4 +37,9 @@ private:
     QString m_projectRoot;
     QString m_currentFile;
     QVector<FunctionInfo> m_currentFunctions;
+
+    CppSyntaxHighlighter* m_highlighter = nullptr;
+    QVector<QTextEdit::ExtraSelection> m_selections; // not strictly needed
+    void highlightMethodRange(const FunctionInfo& fn);
+
 };
