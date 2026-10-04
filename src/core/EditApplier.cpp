@@ -1,4 +1,3 @@
-// core/EditApplier.cpp
 #include "EditApplier.h"
 #include <QFile>
 #include <QSaveFile>
@@ -10,12 +9,11 @@ QStringList EditApplier::apply(const QStringList& originalLines,
                                bool* ok) {
     if (ok) *ok = true;
 
-    // Sort descending by line, so earlier inserts don't shift later ones.
-    std::sort(edits.begin(), edits.end(),
-              [](const TextEdit& a, const TextEdit& b) {
-                  if (a.line != b.line) return a.line > b.line;
-                  return a.kind == EditKind::IncludeHeader ? true : false;
-              });
+    // Apply descending by line so earlier edits aren't shifted.
+    std::sort(edits.begin(), edits.end(), [](const TextEdit& a, const TextEdit& b) {
+        if (a.line != b.line) return a.line > b.line;
+        return a.kind == EditKind::ReplaceLine && b.kind != EditKind::ReplaceLine;
+    });
 
     QStringList out = originalLines;
     for (const TextEdit& e : edits) {
@@ -23,11 +21,15 @@ QStringList EditApplier::apply(const QStringList& originalLines,
             if (ok) *ok = false;
             continue;
         }
-        // Split multiline inserts into individual lines.
-        const QStringList add = e.text.split('\n');
-        for (int i = add.size() - 1; i >= 0; --i) {
-            out.insert(e.line, add[i]);
+
+        if (e.kind == EditKind::ReplaceLine) {
+            const int removeCount = qBound(0, e.replaceCount, out.size() - e.line);
+            for (int i = 0; i < removeCount; ++i) out.removeAt(e.line);
         }
+
+        const QStringList add = e.text.split('\n');
+        for (int i = add.size() - 1; i >= 0; --i)
+            out.insert(e.line, add[i]);
     }
     return out;
 }
@@ -65,12 +67,8 @@ bool EditApplier::applyToFile(const QString& filePath,
 QString EditApplier::makeDiff(const QStringList& original,
                               const QStringList& modified,
                               const QString& fileLabel) {
-    // Very small, dependency-free diff: emit the whole file with -/+ markers
-    // for changed lines only. Good enough for a preview dialog.
     QString out;
     out += QStringLiteral("--- a/%1\n+++ b/%1\n").arg(fileLabel);
-
-    // Simple LCS-free heuristic: walk both, mark inserted lines.
     int i = 0, j = 0;
     while (i < original.size() || j < modified.size()) {
         if (i < original.size() && j < modified.size() &&
@@ -79,10 +77,9 @@ QString EditApplier::makeDiff(const QStringList& original,
             ++i; ++j;
         } else if (j < modified.size() &&
                    (i >= original.size() || !modified.contains(original[i]))) {
-            // insertion
             out += "+" + modified[j] + "\n";
             ++j;
-        } else {
+        } else if (i < original.size()) {
             out += "-" + original[i] + "\n";
             ++i;
         }

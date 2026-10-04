@@ -1,21 +1,26 @@
-// core/TextEdit.h
 #pragma once
 #include <QString>
 
 enum class EditKind {
-    TraceFn,        // insert TRACE_FN();
-    OriginScope,    // insert trace::OriginScope ...
-    IncludeHeader,  // insert #include "trace/Trace.h"
+    InsertBeforeLine,   // insert `text` before `line`; `replaceCount` ignored
+    ReplaceLine,        // replace `replaceCount` lines starting at `line`
+    IncludeHeader,      // sugar for InsertBeforeLine; same semantics
     Other
 };
 
 struct TextEdit {
-    QString filePath;
-    int     line = 0;         // 0-based; insert BEFORE this line
-    QString text;             // text to insert (may contain \n)
-    EditKind kind = EditKind::Other;
-    QString reason;           // "Foo::bar", "onClicked handler", etc.
+    QString  filePath;
+    int      line         = 0;              // 0-based
+    int      replaceCount = 0;              // only for ReplaceLine
+    QString  text;
+    EditKind kind         = EditKind::InsertBeforeLine;
+    QString  reason;                        // e.g. "DataStore::save"
 
-    // for diff preview
-    int sortKey() const { return line; }
+    // Stable ordering for the applier: process higher lines first.
+    // For equal lines, ReplaceLine goes before InsertBeforeLine.
+    bool operator<(const TextEdit& o) const {
+        if (line != o.line) return line < o.line;
+        return kind == EditKind::ReplaceLine &&
+               o.kind != EditKind::ReplaceLine;
+    }
 };
