@@ -1,0 +1,32 @@
+cmake_minimum_required(VERSION 3.16)
+project(RoniaTraceTool LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_AUTOMOC ON)
+
+find_package(Qt6 REQUIRED COMPONENTS Widgets)
+
+add_executable(RoniaTraceTool
+    src/main.cpp
+    src/MainWindow.cpp
+    src/TraceModel.cpp
+    src/TraceLoader.cpp
+    src/Analyzer.cpp
+    src/AnalysisTabs.cpp
+src/TraceFilter.cpp
+src/TimelineView.cpp
+src/ReportWriter.cpp    
+
+)
+
+target_include_directories(RoniaTraceTool PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_link_libraries(RoniaTraceTool PRIVATE Qt6::Widgets)
+
+if (MSVC)
+    target_compile_options(RoniaTraceTool PRIVATE /W4 /permissive-)
+endif()
