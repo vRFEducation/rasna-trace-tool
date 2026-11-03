@@ -121,29 +121,53 @@ bool HeaderParser::isVariableDeclaration(const QString& line) const {
         return true;
     return false;
 }
-
 bool HeaderParser::isFunctionStart(const QString& line) const {
     QString t = line.trimmed();
+
+    // strip leading Qt declaration macros
+    static const QStringList leadMacros = {
+        "Q_INVOKABLE", "Q_SLOT", "Q_SIGNAL", "Q_REQUIRED_RESULT", "explicit",
+        "inline", "virtual", "static"
+    };
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (const QString& m : leadMacros) {
+            if (t.startsWith(m + " ") || t.startsWith(m + "\t")) {
+                t = t.mid(m.size()).trimmed();
+                changed = true;
+            }
+        }
+    }
+
     static const QStringList skip = {
-        "#","if","for","while","switch","catch","class","struct","enum","return","else"
+        "#", "if", "for", "while", "switch", "catch", "class", "struct",
+        "enum", "return", "else",
+        "Q_PROPERTY", "Q_OBJECT", "Q_ENUM", "Q_FLAG",
+        "Q_DECLARE", "Q_DISABLE_COPY", "QML_ELEMENT", "PROPERTY_PRI",
+        "Q_SIGNALS", "Q_SLOTS", "signals:", "public:", "private:", "protected:"
     };
     for (const auto& s : skip)
         if (t.startsWith(s)) return false;
     if (!t.contains('(')) return false;
     return true;
 }
-
 bool HeaderParser::isCompleteDeclaration(const QString& decl) const {
-    QString t = decl; t.replace('\n', ' '); t = t.trimmed();
-    // strip simple string literals
+    QString t = decl;
+    t.replace('\n', ' ');
+    t = t.trimmed();
+    // strip string literals so braces inside them don't fool us
     static QRegularExpression strRe("\".*?\"");
     t.replace(strRe, "\"\"");
-    static const QStringList ends = {
-        ");", ") const;", ") const {", ") = 0;", ") override;",
-        ") noexcept;", ") const noexcept;", "){", ") const {",
-        ") override {", ") final;", ") = delete;", ") = default;"
-    };
-    for (const auto& e : ends) if (t.contains(e)) return true;
+
+    // 1) ends with ';' → declaration is done
+    if (t.endsWith(';')) return true;
+
+    // 2) has an open brace → require balanced braces and a closing '}'
+    const int open  = t.count('{');
+    const int close = t.count('}');
+    if (open > 0) return open == close;
+
     return false;
 }
 

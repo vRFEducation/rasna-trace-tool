@@ -10,4 +10,8 @@ public:
 
     // True if the file already includes our trace header.
     static bool hasTraceInclude(const QStringList& lines);
+
+    static bool hasTraceEnter(const QStringList& lines, int openBraceLine,
+        int lookahead = 3);
+
 };

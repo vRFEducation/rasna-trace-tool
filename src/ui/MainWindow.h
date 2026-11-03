@@ -27,6 +27,7 @@ private slots:
     void onApplyTrace();
     void onFileSelected(const QModelIndex& idx);
 
+
 private:
     void loadProject(const QString& root);
     void showFileInPreview(const QString& path);

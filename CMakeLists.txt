@@ -10,11 +10,14 @@ set(CMAKE_AUTORCC ON)
 # ---- Qt ----
 # Prefer Qt6; fall back to Qt5 so the project builds on older toolchains.
 find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets)
-find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets)
+find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets Qml)
 
 # ---- Sources ----
 set(APP_SOURCES
     src/main.cpp
+    # trace runtime
+    src/trace/TraceBridge.h
+    src/trace/Trace.h
 
     # core
     src/core/FunctionInfo.h
@@ -26,6 +29,8 @@ set(APP_SOURCES
     src/core/CppImplFinder.cpp
     src/core/BraceScanner.h
     src/core/BraceScanner.cpp
+    src/core/QmlFunctionFinder.h
+    src/core/QmlFunctionFinder.cpp
 
     # new core pieces
     src/core/TextEdit.h
@@ -55,7 +60,9 @@ set(APP_RESOURCES
 add_executable(RoniaTraceTool ${APP_SOURCES} ${APP_RESOURCES})
 
 target_include_directories(RoniaTraceTool PRIVATE src)
-target_link_libraries(RoniaTraceTool PRIVATE Qt${QT_VERSION_MAJOR}::Widgets)
+target_link_libraries(RoniaTraceTool PRIVATE
+    Qt${QT_VERSION_MAJOR}::Widgets
+    Qt${QT_VERSION_MAJOR}::Qml)
 
 # ---- Platform niceties ----
 if (WIN32)

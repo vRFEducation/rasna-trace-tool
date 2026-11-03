@@ -5,6 +5,8 @@ enum class EditKind {
     InsertBeforeLine,   // insert `text` before `line`; `replaceCount` ignored
     ReplaceLine,        // replace `replaceCount` lines starting at `line`
     IncludeHeader,      // sugar for InsertBeforeLine; same semantics
+    TraceFn,        // insert TRACE_FN() / Trace.enter(...)
+    OriginScope,    // insert trace::OriginScope / Trace.origin(...)
     Other
 };
 

@@ -4,6 +4,16 @@
 #include <QFile>
 #include <QTextStream>
 
+static bool looksLikeDefinition(const QString& line, const QString& key) {
+    int k = line.indexOf(key);
+    if (k < 0) return false;
+    // must not be a forward declaration or a call
+    int semi = line.indexOf(';', k);
+    int brace = line.indexOf('{', k);
+    if (semi >= 0 && (brace < 0 || semi < brace)) return false;
+    return true;
+}
+
 QVector<FunctionInfo> CppImplFinder::findImplementations(const QString& cppFilePath,
                                                          const QVector<FunctionInfo>& headerFns) {
     QVector<FunctionInfo> found;
@@ -28,7 +38,7 @@ QVector<FunctionInfo> CppImplFinder::findImplementations(const QString& cppFileP
 
         int sigLine = -1;
         for (int i = 0; i < stripped.size(); ++i) {
-            if (stripped[i].contains(key)) { sigLine = i; break; }
+            if (looksLikeDefinition(stripped[i], key)) { sigLine = i; break; }
         }
         if (sigLine < 0) continue;
 

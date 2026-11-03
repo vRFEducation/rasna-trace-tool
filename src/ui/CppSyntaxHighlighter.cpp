@@ -103,24 +103,52 @@ void CppSyntaxHighlighter::setupQml() {
 }
 
 void CppSyntaxHighlighter::highlightBlock(const QString& text) {
-    // Multi-line comments first
+    // ---- Multi-line comments ----
     setCurrentBlockState(0);
-    int start = 0;
-    if (previousBlockState() != 1)
-        start = text.indexOf(m_blockStart);
 
-    while (start >= 0) {
-        auto m = m_blockEnd.match(text, start);
-        int end = m.hasMatch() ? m.capturedEnd() : text.length();
-        setFormat(start, end - start, m_multilineCommentFmt);
-        if (!m.hasMatch()) { setCurrentBlockState(1); break; }
-        start = text.indexOf(m_blockStart, end);
+    int start = 0;
+    if (previousBlockState() != 1) {
+        auto firstStart = m_blockStart.match(text);
+        if (!firstStart.hasMatch()) start = -1;
+        else start = firstStart.capturedStart();
     }
 
+    int guard = 0;
+    while (start >= 0 && start < text.size()) {
+        if (++guard > 10000) {
+            // Something is pathological. Give up cleanly rather than hang.
+            setCurrentBlockState(0);
+            break;
+        }
+
+        auto endMatch = m_blockEnd.match(text, start);
+        if (endMatch.hasMatch()) {
+            int end = endMatch.capturedEnd();
+            if (end <= start) {
+                // Zero-length match — advance one char to avoid infinite loop.
+                start++;
+                continue;
+            }
+            setFormat(start, end - start, m_multilineCommentFmt);
+            start = text.indexOf(m_blockStart, end);
+        } else {
+            // No end marker on this block — rest of block is comment,
+            // and the state carries over to the next block.
+            setFormat(start, text.length() - start, m_multilineCommentFmt);
+            setCurrentBlockState(1);
+            break;
+        }
+    }
+
+    // ---- Single-line rules ----
     for (const Rule& r : m_rules) {
         auto it = r.pattern.globalMatch(text);
         while (it.hasNext()) {
             auto m = it.next();
+            if (m.capturedLength() == 0) {
+                // Defensive: empty matches would loop globalMatch forever.
+                continue;
+            }
             setFormat(m.capturedStart(), m.capturedLength(), r.format);
         }
     }

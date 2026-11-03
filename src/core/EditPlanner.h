@@ -18,7 +18,7 @@ public:
     static QVector<TextEdit> plan(const QString& filePath,
                                   const QStringList& lines,
                                   const QVector<FunctionInfo>& functions,
-                                  const Options& opts = {});
+                                  const Options& opts);
 
 private:
     static OriginHint classifyOrigin(const FunctionInfo& fn);

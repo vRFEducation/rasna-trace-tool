@@ -20,3 +20,12 @@ bool IdempotencyChecker::hasTraceInclude(const QStringList& lines) {
     }
     return false;
 }
+
+bool IdempotencyChecker::hasTraceEnter(const QStringList& lines,
+    int openBraceLine, int lookahead) {
+const int end = qMin(openBraceLine + 1 + lookahead, lines.size());
+for (int i = openBraceLine + 1; i < end; ++i) {
+if (lines[i].contains("Trace.enter(")) return true;
+}
+return false;
+}

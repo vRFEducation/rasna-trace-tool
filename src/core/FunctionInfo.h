@@ -19,6 +19,14 @@ struct ParamInfo {
     bool    hasDefault = false;
 };
 
+enum class SourceKind {
+    Cpp,            // C++ method
+    QmlFunction,    // function foo() { ... }
+    QmlHandler      // on<Signal>: { ... }  or  Component.on<X>: { ... }
+};
+enum class BodyKind { Block, Expression };
+
+
 struct FunctionInfo {
     QString filePath;
     QString className;
@@ -39,6 +47,9 @@ struct FunctionInfo {
     bool isDefaulted   = false;
     bool isPureVirtual = false;
 
+    SourceKind kind = SourceKind::Cpp;
+    QString qmlHandlerName;   // "onClicked", "Component.onCompleted", "saveReading"
+
     QtAccess access = QtAccess::Unknown;
     OriginHint originHint = OriginHint::Internal;
 
@@ -46,6 +57,12 @@ struct FunctionInfo {
     int signatureLine  = -1;
     int openBraceLine  = -1;
     int closeBraceLine = -1;
+
+    // Body range (valid for both kinds).
+    int         bodyStartLine = 0;
+    int         bodyEndLine = 0;
+
+    BodyKind    bodyKind = BodyKind::Block;
 
     QString signature() const {
         QString cls = className.isEmpty() ? QString() : className + QStringLiteral("::");

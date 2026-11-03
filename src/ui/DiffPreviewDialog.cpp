@@ -66,8 +66,7 @@ DiffPreviewDialog::DiffPreviewDialog(QWidget* parent) : QDialog(parent) {
 
 void DiffPreviewDialog::setPlans(QVector<FilePlan> plans) {
     m_plans = std::move(plans);
-    m_fileEnabled.assign(m_plans.size(), true);
-
+    m_fileEnabled.fill(true, m_plans.size());
     m_tree->clear();
     for (int i = 0; i < m_plans.size(); ++i) {
         const auto& p = m_plans[i];

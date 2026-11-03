@@ -2,11 +2,17 @@
 #include <QApplication>
 #include <QFile>
 #include <QTextStream>
+#include "trace/TraceBridge.h"
+#include <QQmlEngine>          // for qmlRegisterSingletonInstance
+
 
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
     QApplication::setApplicationName("Ronia Trace Tool");
     QApplication::setOrganizationName("Ronia");
+
+    static TraceBridge traceBridge;
+    qmlRegisterSingletonInstance("Trace", 1, 0, "Trace", &traceBridge);
 
     // Load stylesheet if present next to the executable.
     QFile qss("style.qss");

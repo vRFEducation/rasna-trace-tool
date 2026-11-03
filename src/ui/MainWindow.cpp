@@ -19,6 +19,7 @@
 
 #include <core/EditApplier.h>
 #include <core/EditPlanner.h>
+#include <core/QmlFunctionFinder.h>
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent), ui(new Ui::MainWindow) {
@@ -119,11 +120,13 @@ void MainWindow::onDetectMethods() {
     const QString suffix = QFileInfo(m_currentFile).suffix().toLower();
 
     QVector<FunctionInfo> result;
-    if (suffix == "h" || suffix == "hpp" || suffix == "hxx") {
+    if (suffix == "qml") {
+        QmlFunctionFinder finder;
+        result = finder.findFunctions(m_currentFile);
+    } else if (suffix == "h" || suffix == "hpp" || suffix == "hxx") {
         HeaderParser parser;
         result = parser.parseFile(m_currentFile);
     } else if (suffix == "cpp" || suffix == "cc" || suffix == "cxx") {
-        // Find the paired header, parse it, then locate bodies in this cpp.
         QString hPath = m_currentFile;
         hPath.replace(QRegularExpression("\\.(cpp|cc|cxx)$"), ".h");
         if (QFile::exists(hPath)) {
@@ -224,7 +227,10 @@ void MainWindow::onApplyTrace() {
         // parse
         QVector<FunctionInfo> fns;
         const QString sfx = QFileInfo(file).suffix().toLower();
-        if (sfx == "h" || sfx == "hpp" || sfx == "hxx") {
+        if (sfx == "qml") {
+                QmlFunctionFinder finder;
+                fns = finder.findFunctions(file);
+        } else if (sfx == "h" || sfx == "hpp" || sfx == "hxx") {
             HeaderParser parser;
             fns = parser.parseFile(file);
         } else {
@@ -284,3 +290,5 @@ void MainWindow::onApplyTrace() {
     showFileInPreview(m_currentFile);
     onDetectMethods();
 }
+
+

@@ -92,6 +92,73 @@ QVector<TextEdit> EditPlanner::plan(const QString& filePath,
         edits.push_back(e);
     }
 
+    // ---- QML files take a different path ----
+if (filePath.endsWith(".qml", Qt::CaseInsensitive)) {
+    if (opts.includePolicy != Options::IncludePolicy::Never) {
+        TextEdit inc;
+        inc.filePath = filePath;
+        inc.line     = 0;
+        inc.text     = QStringLiteral("import Trace 1.0");
+        inc.kind     = EditKind::IncludeHeader;
+        inc.reason   = "trace runtime (QML)";
+        // Skip if already imported — but the existing include-check is
+        // C++-specific, so do a quick inline check.
+        bool alreadyImported = false;
+        for (int i = 0; i < qMin(lines.size(), 20); ++i) {
+            if (lines[i].contains("import Trace")) { alreadyImported = true; break; }
+        }
+        if (!alreadyImported) edits.push_back(inc);
+    }
+
+    for (const FunctionInfo& fn : functions) {
+        if (fn.openBraceLine <= 0 || fn.closeBraceLine < fn.openBraceLine) continue;
+
+        const int braceIdx  = fn.openBraceLine - 1;
+        const int closeIdx  = fn.closeBraceLine - 1;
+        if (braceIdx >= lines.size() || closeIdx >= lines.size()) continue;
+
+        if (IdempotencyChecker::hasTraceEnter(lines, braceIdx)) continue;
+
+        const QString lineIndent = leadingWhitespace(lines[braceIdx]);
+        const QString bodyIndent = lineIndent + "    ";
+
+        // -- enter edit: insert right after the '{' line --
+        QString enterBlock;
+        if (opts.addOriginScope && fn.originHint != OriginHint::Internal) {
+            QString originName =
+                fn.originHint == OriginHint::User   ? "User"   :
+                fn.originHint == OriginHint::Device ? "Device" :
+                fn.originHint == OriginHint::Timer  ? "Timer"  : "Signal";
+            enterBlock += bodyIndent + QStringLiteral("Trace.origin(\"%1\", \"%2\");\n")
+                                          .arg(originName, fn.qmlHandlerName);
+        }
+        enterBlock += bodyIndent + QStringLiteral("Trace.enter(\"%1\", \"%2\", %3);")
+                                      .arg(fn.name,
+                                           QFileInfo(filePath).fileName())
+                                      .arg(fn.openBraceLine);
+
+        TextEdit enterEdit;
+        enterEdit.filePath = filePath;
+        enterEdit.line     = braceIdx + 1;
+        enterEdit.text     = enterBlock;
+        enterEdit.kind     = fn.originHint == OriginHint::Internal
+                                 ? EditKind::TraceFn
+                                 : EditKind::OriginScope;
+        enterEdit.reason   = fn.qmlHandlerName + " [enter]";
+        edits.push_back(enterEdit);
+
+        // -- exit edit: insert before the '}' line --
+        TextEdit exitEdit;
+        exitEdit.filePath = filePath;
+        exitEdit.line     = closeIdx;       // 0-based, insert before the '}'
+        exitEdit.text     = bodyIndent + QStringLiteral("Trace.exit();");
+        exitEdit.kind     = EditKind::TraceFn;
+        exitEdit.reason   = fn.qmlHandlerName + " [exit]";
+        edits.push_back(exitEdit);
+    }
+    return edits;
+}
+
     // ---- per function ----
     for (const FunctionInfo& fn : functions) {
         if (fn.openBraceLine <= 0) continue;
