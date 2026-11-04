@@ -5,8 +5,9 @@
 
 class CppImplFinder {
 public:
-    // For each header FunctionInfo, find its definition in cppFilePath.
-    // Returns a filtered list: only functions with a located body.
+    // Scans the .cpp directly. Ignores headerFns (kept in the signature so
+    // existing callers don't need to change). Returns one FunctionInfo per
+    // detected function definition.
     QVector<FunctionInfo> findImplementations(const QString& cppFilePath,
-                                              const QVector<FunctionInfo>& headerFns);
+                                              const QVector<FunctionInfo>& headerFns = {});
 };

@@ -12,8 +12,11 @@ QStringList EditApplier::apply(const QStringList& originalLines,
     // Apply descending by line so earlier edits aren't shifted.
     std::sort(edits.begin(), edits.end(), [](const TextEdit& a, const TextEdit& b) {
         if (a.line != b.line) return a.line > b.line;
+        // Same line: ReplaceLine first (so its replacement doesn't get pushed
+        // down by an InsertBeforeLine above it).
         return a.kind == EditKind::ReplaceLine && b.kind != EditKind::ReplaceLine;
     });
+
 
     QStringList out = originalLines;
     for (const TextEdit& e : edits) {
@@ -28,8 +31,8 @@ QStringList EditApplier::apply(const QStringList& originalLines,
         }
 
         const QStringList add = e.text.split('\n');
-        for (int i = add.size() - 1; i >= 0; --i)
-            out.insert(e.line, add[i]);
+        for (int i = 0; i < add.size(); ++i)
+            out.insert(e.line + i, add[i]);
     }
     return out;
 }

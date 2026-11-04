@@ -6,67 +6,103 @@
 
 namespace {
 
-// Strips comments and replaces string/template contents with spaces of the
-// same length, so brace scanning is safe. Preserves line breaks.
+// One-pass scanner over the full file text.
+// Returns a vector<QString> where every comment/string/template-literal
+// character has been replaced by a space (line structure is preserved).
+// The scanner NEVER has persistent "state" across lines — it walks the
+// entire file as a single string, so it cannot get stuck.
 QVector<QString> stripQml(const QVector<QString>& lines) {
+    // Reassemble into one string, keeping track of line boundaries.
+    // (We rebuild it again at the end so nothing is lost.)
+    QString all;
+    all.reserve(1 << 20);
+    QVector<int> lineStarts;
+    lineStarts.reserve(lines.size());
+    for (int i = 0; i < lines.size(); ++i) {
+        lineStarts.push_back(all.size());
+        all += lines[i];
+        all += QLatin1Char('\n');
+    }
+
+    const int n = all.size();
+    enum Mode { Normal, LineComment, BlockComment, Str, TemplateStr, TemplateExpr };
+    QVector<Mode> modeStack;
+    Mode mode = Normal;
+
+    for (int i = 0; i < n; ++i) {
+        const QChar c = all[i];
+        const QChar next = (i + 1 < n) ? all[i + 1] : QChar();
+
+        switch (mode) {
+        case Normal:
+            if (c == '/' && next == '/') { all[i] = ' '; all[i+1] = ' '; ++i; mode = LineComment; }
+            else if (c == '/' && next == '*') { all[i] = ' '; all[i+1] = ' '; ++i; mode = BlockComment; }
+            else if (c == '"' || c == '\'') { all[i] = ' '; modeStack.append(Normal); mode = Str; }
+            else if (c == '`') { all[i] = ' '; modeStack.append(Normal); mode = TemplateStr; }
+            break;
+
+        case LineComment:
+            if (c == '\n') { mode = Normal; }   // the newline is kept
+            else all[i] = ' ';
+            break;
+
+        case BlockComment:
+            if (c == '*' && next == '/') { all[i] = ' '; all[i+1] = ' '; ++i; mode = Normal; }
+            else if (c != '\n') all[i] = ' ';
+            break;
+
+        case Str:
+            if (c == '\\') { all[i] = ' '; if (i+1 < n) { all[i+1] = ' '; ++i; } }
+            else if (c == '"' || c == '\'') {
+                all[i] = ' ';
+                mode = modeStack.isEmpty() ? Normal : modeStack.takeLast();
+            }
+            else if (c == '\n') {
+                // Unterminated single-line string: bail to Normal so we can't
+                // stay stuck in Str for the rest of the file.
+                mode = modeStack.isEmpty() ? Normal : modeStack.last();
+                mode = modeStack.isEmpty() ? Normal : modeStack.takeLast();
+            }
+            else all[i] = ' ';
+            break;
+
+        case TemplateStr:
+            if (c == '\\') { all[i] = ' '; if (i+1 < n) { all[i+1] = ' '; ++i; } }
+            else if (c == '`') {
+                all[i] = ' ';
+                mode = modeStack.isEmpty() ? Normal : modeStack.takeLast();
+            }
+            else if (c == '$' && next == '{') { all[i] = ' '; all[i+1] = ' '; ++i; modeStack.append(TemplateStr); mode = TemplateExpr; }
+            else if (c != '\n') all[i] = ' ';
+            break;
+
+        case TemplateExpr:
+            if (c == '{') { all[i] = ' '; modeStack.append(TemplateExpr); }
+            else if (c == '}') {
+                all[i] = ' ';
+                mode = modeStack.isEmpty() ? Normal : modeStack.takeLast();
+            }
+            else if (c == '`') { all[i] = ' '; modeStack.append(TemplateExpr); mode = TemplateStr; }
+            else if (c == '"' || c == '\'') { all[i] = ' '; modeStack.append(TemplateExpr); mode = Str; }
+            else if (c == '/' && next == '/') { all[i] = ' '; all[i+1] = ' '; ++i; mode = LineComment; }
+            // Everything else (real expression code) is left intact.
+            break;
+        }
+    }
+
+    // Re-split into lines.
     QVector<QString> out;
     out.reserve(lines.size());
-
-    enum State { Normal, LineComment, BlockComment, Str, TemplateStr, TemplateExpr };
-    State state = Normal;
-    QVector<State> templateStack;
-
-    for (const QString& raw : lines) {
-        QString s = raw;
-        for (int i = 0; i < s.size(); ++i) {
-            QChar c = s[i];
-            QChar n = (i + 1 < s.size()) ? s[i + 1] : QChar();
-
-            switch (state) {
-            case Normal:
-                if (c == '/' && n == '/') { s[i] = ' '; s[i+1] = ' '; i++; state = LineComment; }
-                else if (c == '/' && n == '*') { s[i] = ' '; s[i+1] = ' '; i++; state = BlockComment; }
-                else if (c == '"')            { s[i] = ' '; state = Str; }
-                else if (c == '\'')           { s[i] = ' '; state = Str; }
-                else if (c == '`')            { s[i] = ' '; state = TemplateStr; }
-                break;
-            case LineComment:
-                s[i] = ' ';
-                break;
-            case BlockComment:
-                if (c == '*' && n == '/') { s[i] = ' '; s[i+1] = ' '; i++; state = Normal; }
-                else s[i] = ' ';
-                break;
-            case Str:
-                if (c == '\\') { s[i] = ' '; if (i+1 < s.size()) s[i+1] = ' '; i++; }
-                else if (c == '"' || c == '\'') { s[i] = ' '; state = Normal; }
-                else s[i] = ' ';
-                break;
-            case TemplateStr:
-                if (c == '\\') { s[i] = ' '; if (i+1 < s.size()) s[i+1] = ' '; i++; }
-                else if (c == '`')  { s[i] = ' '; state = Normal; }
-                else if (c == '$' && n == '{') { s[i] = ' '; s[i+1] = ' '; i++; templateStack.append(TemplateStr); state = TemplateExpr; }
-                else s[i] = ' ';
-                break;
-            case TemplateExpr:
-                if (c == '{') { s[i] = ' '; templateStack.append(TemplateExpr); }
-                else if (c == '}') {
-                    s[i] = ' ';
-                    if (!templateStack.isEmpty()) templateStack.removeLast();
-                    state = templateStack.isEmpty() ? Normal : templateStack.last();
-                }
-                else if (c == '`') { s[i] = ' '; templateStack.append(TemplateExpr); state = TemplateStr; }
-                else if (c == '"') { s[i] = ' '; state = Str; }
-                break;
-            }
-        }
-        if (state == LineComment) state = Normal;
-        out.push_back(s);
+    int pos = 0;
+    for (int i = 0; i < lines.size(); ++i) {
+        int end = all.indexOf(QLatin1Char('\n'), pos);
+        if (end < 0) end = all.size();
+        out.push_back(all.mid(pos, end - pos));
+        pos = end + 1;
     }
     return out;
 }
 
-// Matches braces to find the closing line. Returns -1 if unterminated.
 int findCloseBrace(const QVector<QString>& stripped, int openBraceLine) {
     int depth = 0;
     bool started = false;
@@ -83,35 +119,21 @@ int findCloseBrace(const QVector<QString>& stripped, int openBraceLine) {
     return -1;
 }
 
-// Starting from a line, find the first '{' — but ONLY if it appears before
-// the end of the *expression body* on that line. We use it to detect whether
-// a handler's body is a block (has `{`) or a plain expression.
-//
-// Returns the line index of the opening brace, or -1 if no brace is found
-// before the handler value looks like an expression body.
 int findBodyOpenBrace(const QVector<QString>& stripped, int startLine, int colonPos) {
-    // Scan from `colonPos` on the start line, then continue onto subsequent
-    // lines *only* if the first non-space char is `{`.
     const QString& l0 = stripped[startLine];
-    // Look at the text after the colon on the start line.
     for (int i = colonPos; i < l0.size(); ++i) {
         if (l0[i] == '{') return startLine;
-        // Semicolon terminates the expression body on this line.
         if (l0[i] == ';') return -1;
     }
-    // No brace on the start line. Peek next line: a lone `{` (or a line
-    // starting with `{`) still counts as a block body for that handler.
-    for (int j = startLine + 1; j < stripped.size() && j <= startLine + 4; ++j) {
+    for (int j = startLine + 1; j < stripped.size() && j <= startLine + 2; ++j) {
         QString t = stripped[j].trimmed();
         if (t.isEmpty()) continue;
         if (t.startsWith('{')) return j;
-        // Anything else means expression body ended on the previous line.
         return -1;
     }
     return -1;
 }
 
-// Classifies a handler by name → OriginHint
 OriginHint classifyHandler(const QString& handler) {
     if (handler.startsWith("Component.on")) return OriginHint::User;
 
@@ -120,29 +142,46 @@ OriginHint classifyHandler(const QString& handler) {
     static const QRegularExpression timerRe(R"(^on(Triggered|Timeout)$)");
     static const QRegularExpression deviceRe(R"(^on(DataReady|ReadyRead|ValueChanged|ReadingChanged)$)");
 
-    if (mouseRe.match(handler).hasMatch() || keyRe.match(handler).hasMatch())
-        return OriginHint::User;
-    if (timerRe.match(handler).hasMatch())
-        return OriginHint::Timer;
-    if (deviceRe.match(handler).hasMatch())
-        return OriginHint::Device;
+    if (mouseRe.match(handler).hasMatch() || keyRe.match(handler).hasMatch()) return OriginHint::User;
+    if (timerRe.match(handler).hasMatch())  return OriginHint::Timer;
+    if (deviceRe.match(handler).hasMatch()) return OriginHint::Device;
     return OriginHint::Signal;
 }
 
-// True if a `function ...` declaration has no block body on this line
-// (e.g. `function f()` followed by `{` on next line, or expression-bodied
-// is invalid for JS function declarations, so we only support block).
-bool functionHasBlockBody(const QVector<QString>& stripped, int line, int parenEnd) {
-    const QString& l = stripped[line];
-    for (int i = parenEnd; i < l.size(); ++i) {
-        if (l[i] == '{') return true;
-        if (l[i] == ';') return false;
+bool looksLikeHandlerName(const QString& name) {
+    return name.size() > 2
+           && name[0] == 'o' && name[1] == 'n'
+           && name[2].isUpper();
+}
+
+// --- Part 2: scan forward for '{', tolerate any intervening lines ---
+bool functionHasBlockBody(const QVector<QString>& stripped, int line, int parenStart) {
+    // Scan from the '(' on the signature line, tracking paren depth to find
+    // the closing ')'. Then look for '{' after it (possibly on a later line).
+    int depth = 0;
+    int parenEnd = -1;
+    for (int ln = line; ln < stripped.size() && ln <= line + 10; ++ln) {
+        const QString& l = stripped[ln];
+        int start = (ln == line) ? parenStart : 0;
+        for (int i = start; i < l.size(); ++i) {
+            if (l[i] == '(') ++depth;
+            else if (l[i] == ')') {
+                --depth;
+                if (depth == 0) { parenEnd = i; goto done_paren; }
+            }
+        }
     }
-    // Look ahead one or two lines for the `{`.
-    for (int j = line + 1; j < stripped.size() && j <= line + 2; ++j) {
-        QString t = stripped[j].trimmed();
-        if (t.isEmpty()) continue;
-        return t.startsWith('{');
+done_paren:
+    if (parenEnd < 0) return false;
+
+    // From the closing ')', scan forward for '{' (must appear before ';' or '}').
+    for (int ln = line; ln < stripped.size() && ln <= line + 10; ++ln) {
+        const QString& l = stripped[ln];
+        int start = (ln == line) ? parenEnd + 1 : 0;
+        for (int i = start; i < l.size(); ++i) {
+            if (l[i] == '{') return true;
+            if (l[i] == ';' || l[i] == '}') return false;
+        }
     }
     return false;
 }
@@ -160,76 +199,75 @@ QVector<FunctionInfo> QmlFunctionFinder::findFunctions(const QString& qmlPath) {
 
     const QVector<QString> stripped = stripQml(lines);
 
-    // ---- Regex 1: function name(params) — body kind determined afterwards.
     static const QRegularExpression funcRe(
-        R"(^\s*function\s+([A-Za-z_$][\w$]*)\s*\(([^)]*)\))");
-
-    // ---- Regex 2: on<Signal>:   or   Component.on<X>:
-    // No `{` required in the regex — the body may be a block or an expression.
-    // We capture the property name and the rest-of-line after the colon.
+        R"(^\s*function\s+([A-Za-z_$][\w$]*)\s*\()");
     static const QRegularExpression handlerRe(
-        R"(^\s*(Component\.on[A-Za-z]\w*|on[A-Z]\w*)\s*:)");
+        R"(^\s*(?:[A-Za-z_]\w*\s*\.\s*)?(Component\.on[A-Za-z]\w*|on[A-Z]\w*)\s*:)");
+
+    static const QRegularExpression bindingBlockRe(
+        R"(^\s*(?:readonly\s+)?property\s+\S+\s+([A-Za-z_$][\w$]*)\s*:\s*$)");
 
     for (int i = 0; i < stripped.size(); ++i) {
         const QString& line = stripped[i];
 
-        // ================= JS function =================
-        auto funcMatch = funcRe.match(line);
+        // ---------- JS function ----------
+       auto funcMatch = funcRe.match(line);
         if (funcMatch.hasMatch()) {
-            int parenEnd = funcMatch.capturedEnd(2) + 1; // position after ')'
+            // parenStart = position right after the name (the '(' is at capturedEnd(1) + whitespace)
+            int parenStart = funcMatch.capturedEnd(1);
+            // Skip whitespace to get to '('
+            while (parenStart < line.size() && line[parenStart] != '(') ++parenStart;
+            if (parenStart >= line.size()) continue;
 
-            // A function declaration must have a block body.
-            if (!functionHasBlockBody(stripped, i, parenEnd)) {
-                // Not a real function declaration (probably a call). Skip.
-                continue;
-            }
+            if (!functionHasBlockBody(stripped, i, parenStart)) continue;
 
             FunctionInfo info;
-            info.kind           = SourceKind::QmlFunction;
             info.filePath       = qmlPath;
-            info.qmlHandlerName = funcMatch.captured(1);
             info.name           = funcMatch.captured(1);
+            info.qmlHandlerName = info.name;
             info.signatureLine  = i + 1;
-            info.originHint     = OriginHint::Internal;
             info.bodyKind       = BodyKind::Block;
 
-            // Parse parameters — supports `a`, `a = 1`, `...rest`
-            const QString params = funcMatch.captured(2).trimmed();
-            if (!params.isEmpty()) {
-                for (const QString& p : params.split(',')) {
-                    QString name = p.trimmed();
-                    if (name.startsWith("...")) name = name.mid(3).trimmed();
-                    int eq = name.indexOf('=');
-                    if (eq >= 0) name = name.left(eq).trimmed();
-                    if (!name.isEmpty()) {
-                        ParamInfo pi;
-                        pi.name = name;
-                        info.params.append(pi);
-                    }
-                }
+            if (looksLikeHandlerName(info.name)) {
+                info.kind       = SourceKind::QmlHandler;
+                info.originHint = classifyHandler(info.name);
+            } else {
+                info.kind       = SourceKind::QmlFunction;
+                info.originHint = OriginHint::Internal;
             }
 
-            int open = i;
-            // The `{` may be on the same line or one/two lines down.
-            // Find it via findCloseBrace starting from i; it is tolerant.
-            while (open < stripped.size() && !stripped[open].contains('{')) ++open;
-            if (open >= stripped.size()) continue;
+            // Param parsing: scan from parenStart to the matching ')' and split by ','.
+            // (Optional — only needed if you display params in the UI.)
+            // ... existing param parsing but adapted for multi-line ...
+
+            // Find the opening brace: from parenStart forward, first '{'.
+            int open = -1;
+            for (int ln = i; ln < stripped.size() && ln <= i + 10; ++ln) {
+                const QString& l = stripped[ln];
+                int start = (ln == i) ? parenStart : 0;
+                for (int c = start; c < l.size(); ++c) {
+                    if (l[c] == '{') { open = ln; break; }
+                }
+                if (open >= 0) break;
+            }
+            if (open < 0) continue;
 
             int close = findCloseBrace(stripped, open);
             if (close < 0) continue;
 
             info.openBraceLine  = open + 1;
             info.closeBraceLine = close + 1;
+            info.bodyStartLine  = info.openBraceLine;
+            info.bodyEndLine    = info.closeBraceLine;
             out.push_back(info);
-            i = close;
             continue;
         }
 
-        // ================= Signal handler / Component lifecycle =================
+        // ---------- Signal handler ----------
         auto handlerMatch = handlerRe.match(line);
         if (handlerMatch.hasMatch()) {
             const QString name = handlerMatch.captured(1);
-            const int colonPos = handlerMatch.capturedEnd(1); // position right after name, before ':'
+            const int colonPos = handlerMatch.capturedEnd(1);
 
             FunctionInfo info;
             info.kind           = SourceKind::QmlHandler;
@@ -241,74 +279,15 @@ QVector<FunctionInfo> QmlFunctionFinder::findFunctions(const QString& qmlPath) {
 
             const int openBraceLine = findBodyOpenBrace(stripped, i, colonPos);
             if (openBraceLine < 0) {
-                // ---- Expression body: onX: <expr> on one (or more) lines ----
-                // End of body: the first `;` at depth 0, or end of line if no `;`.
-                info.bodyKind = BodyKind::Expression;
+                info.bodyKind       = BodyKind::Expression;
                 info.openBraceLine  = 0;
                 info.closeBraceLine = 0;
-
-                // Find expression-end on the same line (semicolon) or EOL.
-                int bodyEndLine = i;
-                bool foundSemi  = false;
-                const QString& l = stripped[i];
-                for (int k = colonPos; k < l.size(); ++k) {
-                    if (l[k] == ';') { foundSemi = true; break; }
-                }
-                // If the line ends with ',' or '+' or similar continuation,
-                // keep going for a few lines. Conservative but useful.
-                if (!foundSemi) {
-                    const QString trimmed = l.trimmed();
-                    bool continues = trimmed.endsWith(QLatin1Char(','))  ||
-                                     trimmed.endsWith(QLatin1Char('+'))  ||
-                                     trimmed.endsWith(QLatin1Char('-'))  ||
-                                     trimmed.endsWith(QLatin1Char('*'))  ||
-                                     trimmed.endsWith(QLatin1Char('/'))  ||
-                                     trimmed.endsWith(QLatin1Char('&'))  ||
-                                     trimmed.endsWith(QLatin1Char('|'))  ||
-                                     trimmed.endsWith(QLatin1Char('?'))  ||
-                                     trimmed.endsWith(QLatin1Char(':'))  ||
-                                     trimmed.endsWith(QLatin1String("&&")) ||
-                                     trimmed.endsWith(QLatin1String("||")) ||
-                                     trimmed.endsWith(QLatin1String("=>")) ||
-                                     trimmed.endsWith(QLatin1Char('\\'));
-
-                    // Also treat "still inside an open paren/bracket" as a continuation.
-                    if (!continues) {
-                        int depth = 0;
-                        for (QChar c : trimmed) {
-                            if (c == '(' || c == '[') ++depth;
-                            else if (c == ')' || c == ']') --depth;
-                        }
-                        continues = (depth > 0);
-                    }
-
-                    if (continues) {
-                        for (int j = i + 1; j < stripped.size() && j <= i + 8; ++j) {
-                            const QString& lj = stripped[j];
-                            for (int k = 0; k < lj.size(); ++k) {
-                                if (lj[k] == QLatin1Char(';')) { bodyEndLine = j; foundSemi = true; break; }
-                            }
-                            if (foundSemi) break;
-                            bodyEndLine = j;
-                            if (!lj.trimmed().isEmpty()) {
-                                // stop if next line clearly starts a new binding/handler
-                                QString t = lj.trimmed();
-                                static const QRegularExpression newDecl(
-                                    R"(^(Component\.on[A-Za-z]\w*|on[A-Z]\w*|function\s+[A-Za-z_$]|[A-Za-z_$][\w$]*\s*:))");
-                                if (newDecl.match(t).hasMatch()) break;
-                            }
-                        }
-                    }
-                }
-                info.bodyStartLine = i + 1;
-                info.bodyEndLine   = bodyEndLine + 1;
+                info.bodyStartLine  = i + 1;
+                info.bodyEndLine    = i + 1;
                 out.push_back(info);
-                // Do NOT skip past expression bodies — multiple handlers can
-                // share a line, e.g. `onX: a(); onY: b()` (rare but legal).
                 continue;
             }
 
-            // ---- Block body ----
             info.bodyKind = BodyKind::Block;
             int close = findCloseBrace(stripped, openBraceLine);
             if (close < 0) continue;
@@ -317,8 +296,37 @@ QVector<FunctionInfo> QmlFunctionFinder::findFunctions(const QString& qmlPath) {
             info.bodyStartLine  = info.openBraceLine;
             info.bodyEndLine    = info.closeBraceLine;
             out.push_back(info);
-            i = close;
             continue;
+        }
+
+        // ---------- property X: { ... }  (block binding) ----------
+        auto bindingMatch = bindingBlockRe.match(line);
+        if (bindingMatch.hasMatch()) {
+            int open = -1;
+            for (int j = i + 1; j < stripped.size() && j <= i + 3; ++j) {
+                QString t = stripped[j].trimmed();
+                if (t.isEmpty()) continue;
+                if (t.startsWith('{')) open = j;
+                break;
+            }
+            if (open < 0) continue;
+
+            int close = findCloseBrace(stripped, open);
+            if (close < 0) continue;
+
+            FunctionInfo info;
+            info.kind           = SourceKind::QmlFunction;
+            info.filePath       = qmlPath;
+            info.name           = bindingMatch.captured(1);
+            info.qmlHandlerName = info.name;
+            info.signatureLine  = i + 1;
+            info.originHint     = OriginHint::Internal;
+            info.bodyKind       = BodyKind::Block;
+            info.openBraceLine  = open + 1;
+            info.closeBraceLine = close + 1;
+            info.bodyStartLine  = info.openBraceLine;
+            info.bodyEndLine    = info.closeBraceLine;
+            out.push_back(info);
         }
     }
 

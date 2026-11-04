@@ -51,7 +51,7 @@ QString buildGuardLines(const EditPlanner::Options& opts,
     QStringList out;
     if (opts.addOriginScope && hint != OriginHint::Internal) {
         out << indent + QStringLiteral("trace::OriginScope _os(trace::Origin::%1, \"%2\");")
-                          .arg(originScopeName(hint), fn.name);
+                            .arg(originScopeName(hint), fn.name);
     }
     if (opts.addTraceFn) {
         out << indent + QStringLiteral("TRACE_FN();");
@@ -93,71 +93,137 @@ QVector<TextEdit> EditPlanner::plan(const QString& filePath,
     }
 
     // ---- QML files take a different path ----
-if (filePath.endsWith(".qml", Qt::CaseInsensitive)) {
-    if (opts.includePolicy != Options::IncludePolicy::Never) {
-        TextEdit inc;
-        inc.filePath = filePath;
-        inc.line     = 0;
-        inc.text     = QStringLiteral("import Trace 1.0");
-        inc.kind     = EditKind::IncludeHeader;
-        inc.reason   = "trace runtime (QML)";
-        // Skip if already imported — but the existing include-check is
-        // C++-specific, so do a quick inline check.
-        bool alreadyImported = false;
-        for (int i = 0; i < qMin(lines.size(), 20); ++i) {
-            if (lines[i].contains("import Trace")) { alreadyImported = true; break; }
+    if (filePath.endsWith(".qml", Qt::CaseInsensitive)) {
+        if (opts.includePolicy != Options::IncludePolicy::Never) {
+            TextEdit inc;
+            inc.filePath = filePath;
+            inc.line     = 0;
+            inc.text     = QStringLiteral("import Trace 1.0");
+            inc.kind     = EditKind::IncludeHeader;
+            inc.reason   = "trace runtime (QML)";
+            // Skip if already imported — but the existing include-check is
+            // C++-specific, so do a quick inline check.
+            bool alreadyImported = false;
+            for (int i = 0; i < qMin(lines.size(), 20); ++i) {
+                if (lines[i].contains("import Trace")) { alreadyImported = true; break; }
+            }
+            if (!alreadyImported) edits.push_back(inc);
         }
-        if (!alreadyImported) edits.push_back(inc);
-    }
+        for (const FunctionInfo& fn : functions) {
+            // ---- Expression body: onX: <expr> ----
+            if (fn.bodyKind == BodyKind::Expression) {
+                // bodyStartLine / bodyEndLine are 1-based, valid for expression bodies.
+                const int startIdx = fn.bodyStartLine - 1;
+                const int endIdx   = fn.bodyEndLine   - 1;
+                if (startIdx < 0 || endIdx >= lines.size()) continue;
+                if (IdempotencyChecker::hasTraceEnter(lines, startIdx)) continue;
 
-    for (const FunctionInfo& fn : functions) {
-        if (fn.openBraceLine <= 0 || fn.closeBraceLine < fn.openBraceLine) continue;
+                // Rewrite `onX: <expr>` (possibly spanning lines) into:
+                //     onX: {
+                //         Trace.origin(...)
+                //         Trace.enter(...)
+                //         <expr>
+                //         Trace.exit()
+                //     }
+                // Preserve the leading indentation of the handler line.
+                const QString firstLine = lines[startIdx];
+                const QString lineIndent = leadingWhitespace(firstLine);
+                const QString bodyIndent = lineIndent + "    ";
 
-        const int braceIdx  = fn.openBraceLine - 1;
-        const int closeIdx  = fn.closeBraceLine - 1;
-        if (braceIdx >= lines.size() || closeIdx >= lines.size()) continue;
+                // Everything before the colon on the first line is `onX` (+ possible attrs like `first.`).
+                // Find the colon that separates the handler name from the expression.
+                const int colonPos = firstLine.indexOf(QLatin1Char(':'));
+                if (colonPos < 0) continue;
+                const QString head = firstLine.left(colonPos + 1);  // "    onX:" (incl. indent)
 
-        if (IdempotencyChecker::hasTraceEnter(lines, braceIdx)) continue;
+                // Collect the expression text across bodyStartLine..bodyEndLine.
+                // For single-line bodies this is just the text after the colon.
+                QString exprText;
+                for (int ln = startIdx; ln <= endIdx; ++ln) {
+                    QString piece = lines[ln];
+                    if (ln == startIdx) piece = piece.mid(colonPos + 1);
+                    exprText += piece;
+                    if (ln < endIdx) exprText += QLatin1Char('\n');
+                }
+                exprText = exprText.trimmed();
+                if (exprText.isEmpty()) continue;
+                if (!exprText.endsWith(QLatin1Char(';'))) exprText += QLatin1Char(';');
 
-        const QString lineIndent = leadingWhitespace(lines[braceIdx]);
-        const QString bodyIndent = lineIndent + "    ";
+                QStringList newLines;
+                newLines << head + QLatin1Char('{');
+                if (fn.originHint != OriginHint::Internal) {
+                    const QString originName =
+                        fn.originHint == OriginHint::User   ? "User"   :
+                            fn.originHint == OriginHint::Device ? "Device" :
+                            fn.originHint == OriginHint::Timer  ? "Timer"  : "Signal";
+                    newLines << bodyIndent + QStringLiteral("Trace.origin(\"%1\", \"%2\");")
+                                                 .arg(originName, fn.qmlHandlerName);
+                }
+                newLines << bodyIndent + QStringLiteral("Trace.enter(\"%1\", \"%2\", %3);")
+                                             .arg(fn.name, QFileInfo(filePath).fileName())
+                                             .arg(fn.signatureLine);
+                newLines << bodyIndent + exprText;
+                newLines << bodyIndent + QStringLiteral("Trace.exit();");
+                newLines << lineIndent + QLatin1Char('}');
 
-        // -- enter edit: insert right after the '{' line --
-        QString enterBlock;
-        if (opts.addOriginScope && fn.originHint != OriginHint::Internal) {
-            QString originName =
-                fn.originHint == OriginHint::User   ? "User"   :
-                fn.originHint == OriginHint::Device ? "Device" :
-                fn.originHint == OriginHint::Timer  ? "Timer"  : "Signal";
-            enterBlock += bodyIndent + QStringLiteral("Trace.origin(\"%1\", \"%2\");\n")
-                                          .arg(originName, fn.qmlHandlerName);
-        }
-        enterBlock += bodyIndent + QStringLiteral("Trace.enter(\"%1\", \"%2\", %3);")
-                                      .arg(fn.name,
-                                           QFileInfo(filePath).fileName())
-                                      .arg(fn.openBraceLine);
+                TextEdit e;
+                e.filePath     = filePath;
+                e.line         = startIdx;
+                e.replaceCount = endIdx - startIdx + 1;
+                e.kind         = EditKind::ReplaceLine;
+                e.text         = newLines.join(QLatin1Char('\n'));
+                e.reason       = fn.qmlHandlerName + " (expression body wrapped)";
+                edits.push_back(e);
+                continue;
+            }
 
-        TextEdit enterEdit;
-        enterEdit.filePath = filePath;
-        enterEdit.line     = braceIdx + 1;
-        enterEdit.text     = enterBlock;
-        enterEdit.kind     = fn.originHint == OriginHint::Internal
+            // ---- Block body (existing code) ----
+            if (fn.openBraceLine <= 0 || fn.closeBraceLine < fn.openBraceLine) continue;
+
+            const int braceIdx = fn.openBraceLine - 1;
+            const int closeIdx = fn.closeBraceLine - 1;
+            if (braceIdx >= lines.size() || closeIdx >= lines.size()) continue;
+
+            if (IdempotencyChecker::hasTraceEnter(lines, braceIdx)) continue;
+
+            const QString lineIndent = leadingWhitespace(lines[braceIdx]);
+            const QString bodyIndent = lineIndent + "    ";
+
+
+            QString enterBlock;
+            if (opts.addOriginScope && fn.originHint != OriginHint::Internal) {
+                QString originName =
+                    fn.originHint == OriginHint::User   ? "User"   :
+                        fn.originHint == OriginHint::Device ? "Device" :
+                        fn.originHint == OriginHint::Timer  ? "Timer"  : "Signal";
+                enterBlock += bodyIndent + QStringLiteral("Trace.origin(\"%1\", \"%2\");\n")
+                                               .arg(originName, fn.qmlHandlerName);
+            }
+            enterBlock += bodyIndent + QStringLiteral("Trace.enter(\"%1\", \"%2\", %3);")
+                                           .arg(fn.name,
+                                                QFileInfo(filePath).fileName())
+                                           .arg(fn.openBraceLine);
+
+            TextEdit enterEdit;
+            enterEdit.filePath = filePath;
+            enterEdit.line     = braceIdx + 1;
+            enterEdit.text     = enterBlock;
+            enterEdit.kind     = fn.originHint == OriginHint::Internal
                                  ? EditKind::TraceFn
                                  : EditKind::OriginScope;
-        enterEdit.reason   = fn.qmlHandlerName + " [enter]";
-        edits.push_back(enterEdit);
+            enterEdit.reason   = fn.qmlHandlerName + " [enter]";
+            edits.push_back(enterEdit);
 
-        // -- exit edit: insert before the '}' line --
-        TextEdit exitEdit;
-        exitEdit.filePath = filePath;
-        exitEdit.line     = closeIdx;       // 0-based, insert before the '}'
-        exitEdit.text     = bodyIndent + QStringLiteral("Trace.exit();");
-        exitEdit.kind     = EditKind::TraceFn;
-        exitEdit.reason   = fn.qmlHandlerName + " [exit]";
-        edits.push_back(exitEdit);
+            TextEdit exitEdit;
+            exitEdit.filePath = filePath;
+            exitEdit.line     = closeIdx;
+            exitEdit.text     = bodyIndent + QStringLiteral("Trace.exit();");
+            exitEdit.kind     = EditKind::TraceFn;
+            exitEdit.reason   = fn.qmlHandlerName + " [exit]";
+            edits.push_back(exitEdit);
+        }
+        return edits;
     }
-    return edits;
-}
 
     // ---- per function ----
     for (const FunctionInfo& fn : functions) {
@@ -178,8 +244,6 @@ if (filePath.endsWith(".qml", Qt::CaseInsensitive)) {
         if (braceCol < 0) continue;
 
         const QString afterBrace = braceLine.mid(braceCol + 1).trimmed();
-        const bool emptyBody = afterBrace.startsWith('}');
-        if (emptyBody) continue;    // nothing to instrument
 
         const OriginHint hint = opts.addOriginScope
                                     ? classifyOrigin(fn)
@@ -187,6 +251,44 @@ if (filePath.endsWith(".qml", Qt::CaseInsensitive)) {
 
         const QString lineIndent = leadingWhitespace(braceLine);
         const QString bodyIndent = lineIndent + "    ";
+
+        // ---- Case C: empty body on the same line: "void f() {}" ----
+        // (Destructor, trivial getters, trivial slots, etc.)
+        if (afterBrace.startsWith('}')) {
+            if (!opts.reformatOneLiners) continue;   // user asked not to reformat
+
+            // Everything before the '{' is the signature line
+            QString signaturePart = braceLine.left(braceCol).trimmed();
+
+            // Preserve any trailing comment after the '}'
+            QString trailingComment;
+            const int closePos = braceLine.indexOf('}', braceCol + 1);
+            if (closePos >= 0) {
+                QString tail = braceLine.mid(closePos + 1);
+                int commentPos = tail.indexOf("//");
+                if (commentPos >= 0) trailingComment = "  " + tail.mid(commentPos).trimmed();
+                int blockPos = tail.indexOf("/*");
+                if (blockPos >= 0)   trailingComment = "  " + tail.mid(blockPos).trimmed();
+            }
+
+            QStringList newLines;
+            newLines << signaturePart + " {";
+
+            const QString guard = buildGuardLines(opts, hint, fn, bodyIndent);
+            if (!guard.isEmpty()) newLines << guard;
+
+            newLines << lineIndent + "}" + trailingComment;
+
+            TextEdit e;
+            e.filePath     = filePath;
+            e.line         = braceIdx;
+            e.replaceCount = 1;
+            e.kind         = EditKind::ReplaceLine;
+            e.text         = newLines.join('\n');
+            e.reason       = qualifiedName(fn) + " (empty body expanded)";
+            edits.push_back(e);
+            continue;
+        }
 
         // ---- Case A: multi-line body. '{' is last meaningful token. ----
         const bool multilineBody =

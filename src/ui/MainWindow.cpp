@@ -138,6 +138,31 @@ void MainWindow::onDetectMethods() {
     }
 
     m_currentFunctions = result;
+    // ---- TEMP: export detected functions for inspection ----
+    {
+        QFile dump(QFileInfo(m_currentFile).absolutePath() + "/_detected.txt");
+        if (dump.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream os(&dump);
+            os << "File: " << m_currentFile << "\n";
+            os << "Total: " << result.size() << " functions\n\n";
+            os << "idx | kind | bodyKind | sig | open | close | bodyStart | bodyEnd | name\n";
+            os << "----+------+----------+-----+------+-------+-----------+---------+-----\n";
+            for (int i = 0; i < result.size(); ++i) {
+                const FunctionInfo& fn = result[i];
+                os << QString("%1 | %2 | %3 | %4 | %5 | %6 | %7 | %8 | %9\n")
+                          .arg(i, 3)
+                          .arg(int(fn.kind), 4)
+                          .arg(int(fn.bodyKind), 8)
+                          .arg(fn.signatureLine, 4)
+                          .arg(fn.openBraceLine, 4)
+                          .arg(fn.closeBraceLine, 5)
+                          .arg(fn.bodyStartLine, 9)
+                          .arg(fn.bodyEndLine, 7)
+                          .arg(fn.qmlHandlerName);
+            }
+            dump.close();
+        }
+    }
     populateMethodTable(result);
     ui->btnApplyTrace->setEnabled(!result.isEmpty());
 
