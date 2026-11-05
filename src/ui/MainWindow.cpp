@@ -175,6 +175,9 @@ void MainWindow::onFileSelected(const QModelIndex& proxyIdx) {
     // Clear stale matches from the previous file
     m_matches.clear();
     m_currentMatch = -1;
+
+    m_methodSelection.clear();                 // NEW
+    ui->txtFilterPreview->setStyleSheet(QString());   // NEW: clear red
     ui->txtFilterPreview->clear();
 }
 
@@ -194,6 +197,8 @@ void MainWindow::showFileInPreview(const QString& path) {
     // Reset search state for the new file
     m_matches.clear();
     m_currentMatch = -1;
+    m_methodSelection.clear();                 // NEW
+    ui->txtPreview->setExtraSelections({});    // already there
     if (!ui->txtFilterPreview->text().isEmpty())
         highlightAllMatches(ui->txtFilterPreview->text(),
                             ui->chkCaseSensitive->isChecked());
@@ -266,15 +271,15 @@ void MainWindow::setStatus(const QString& text) {
 }
 
 void MainWindow::highlightMethodRange(const FunctionInfo& fn) {
-    QList<QTextEdit::ExtraSelection> sels;
+    m_methodSelection.clear();
 
     if (fn.openBraceLine > 0 && fn.closeBraceLine >= fn.openBraceLine) {
-        QTextCursor cur(ui->txtPreview->document());
-
-        QTextBlock openBlock = ui->txtPreview->document()->findBlockByNumber(fn.openBraceLine - 1);
-        QTextBlock closeBlock = ui->txtPreview->document()->findBlockByNumber(fn.closeBraceLine - 1);
+        auto* doc = ui->txtPreview->document();
+        QTextBlock openBlock  = doc->findBlockByNumber(fn.openBraceLine - 1);
+        QTextBlock closeBlock = doc->findBlockByNumber(fn.closeBraceLine - 1);
 
         if (openBlock.isValid() && closeBlock.isValid()) {
+            QTextCursor cur(doc);
             cur.setPosition(openBlock.position());
             cur.setPosition(closeBlock.position() + closeBlock.length() - 1,
                             QTextCursor::KeepAnchor);
@@ -283,41 +288,45 @@ void MainWindow::highlightMethodRange(const FunctionInfo& fn) {
             sel.cursor = cur;
             sel.format.setBackground(QColor(58, 110, 165, 60));
             sel.format.setProperty(QTextFormat::FullWidthSelection, false);
-            sels.append(sel);
+            m_methodSelection.append(sel);
 
-            QTextCursor sigCur(ui->txtPreview->document());
-            QTextBlock sigBlock = ui->txtPreview->document()->findBlockByNumber(fn.signatureLine - 1);
+            QTextBlock sigBlock = doc->findBlockByNumber(fn.signatureLine - 1);
             if (sigBlock.isValid()) {
+                QTextCursor sigCur(doc);
                 sigCur.setPosition(sigBlock.position());
                 sigCur.setPosition(sigBlock.position() + sigBlock.length() - 1,
                                    QTextCursor::KeepAnchor);
                 QTextEdit::ExtraSelection sigSel;
                 sigSel.cursor = sigCur;
                 sigSel.format.setBackground(QColor(58, 110, 165, 110));
-                sels.append(sigSel);
+                m_methodSelection.append(sigSel);
+
+                ui->txtPreview->setTextCursor(sigCur);
+                ui->txtPreview->centerCursor();
             }
-
-            ui->txtPreview->setTextCursor(sigCur);
-            ui->txtPreview->centerCursor();
         }
     }
 
-    // Preserve any preview search highlights that were active, by merging
-    // them in *before* the method range, so method selection stays on top.
-    // The search highlight list is rebuilt below from m_matches.
-    if (!m_matches.isEmpty()) {
-        for (int i = 0; i < m_matches.size(); ++i) {
-            QTextEdit::ExtraSelection sel;
-            sel.cursor  = m_matches[i];
-            sel.format.setBackground(i == m_currentMatch ? m_currentColor
-                                                         : m_highlightColor);
-            sels.prepend(sel);   // keep method highlight above search hits
-        }
-    }
-
-    ui->txtPreview->setExtraSelections(sels);
+    rebuildPreviewSelections();
 }
 
+void MainWindow::rebuildPreviewSelections()
+{
+    QList<QTextEdit::ExtraSelection> all;
+
+    // Search hits first (drawn underneath)...
+    for (int i = 0; i < m_matches.size(); ++i) {
+        QTextEdit::ExtraSelection sel;
+        sel.cursor = m_matches[i];
+        sel.format.setBackground(i == m_currentMatch ? m_currentColor
+                                                     : m_highlightColor);
+        all.append(sel);
+    }
+    // ...then method range on top.
+    all.append(m_methodSelection);
+
+    ui->txtPreview->setExtraSelections(all);
+}
 // ====================================================================
 // NEW: find-in-preview implementation
 // ====================================================================
@@ -339,15 +348,12 @@ void MainWindow::highlightAllMatches(const QString& text, bool caseSensitive)
         }
     }
 
-    // Apply the highlight layer (no scrolling yet)
-    QList<QTextEdit::ExtraSelection> selections;
-    for (const auto& c : m_matches) {
-        QTextEdit::ExtraSelection sel;
-        sel.cursor = c;
-        sel.format.setBackground(m_highlightColor);
-        selections.append(sel);
-    }
-    ui->txtPreview->setExtraSelections(selections);
+    // No-match feedback: red text when the box is non-empty but nothing matched.
+    const bool noMatch = !text.isEmpty() && m_matches.isEmpty();
+    ui->txtFilterPreview->setStyleSheet(
+        noMatch ? QStringLiteral("QLineEdit { color: red; }") : QString());
+
+    rebuildPreviewSelections();
 
     if (!m_matches.isEmpty())
         findNext(false);
@@ -365,21 +371,12 @@ void MainWindow::findNext(bool backward)
         if (m_currentMatch < 0) m_currentMatch = m_matches.size() - 1;
     }
 
-    QList<QTextEdit::ExtraSelection> selections;
-    for (int i = 0; i < m_matches.size(); ++i) {
-        QTextEdit::ExtraSelection sel;
-        sel.cursor = m_matches[i];
-        sel.format.setBackground(i == m_currentMatch ? m_currentColor
-                                                     : m_highlightColor);
-        selections.append(sel);
-    }
-    ui->txtPreview->setExtraSelections(selections);
+    rebuildPreviewSelections();
 
     QTextCursor cur = m_matches[m_currentMatch];
     ui->txtPreview->setTextCursor(cur);
     ui->txtPreview->ensureCursorVisible();
 }
-
 void MainWindow::onApplyTrace() {
     if (m_currentFile.isEmpty()) return;
 

@@ -50,17 +50,22 @@ private:
     void runApplyTrace();
     void applyPlanToProject(const QVector<DiffPreviewDialog::FilePlan>& plans);
 
-    // NEW proxy models
+    // proxy models ...
     QSortFilterProxyModel* m_projectProxy = nullptr;
     QSortFilterProxyModel* m_fnProxy      = nullptr;
 
-    // NEW preview find state
+    // Preview find state
     QList<QTextCursor> m_matches;
     int                m_currentMatch = -1;
-    QColor             m_highlightColor{255, 235, 59, 120};   // yellow
-    QColor             m_currentColor  {255, 152, 0, 180};    // orange
+    QColor             m_highlightColor{255, 235, 59, 120};
+    QColor             m_currentColor  {255, 152, 0, 180};
 
-    // NEW helper methods
+    // NEW: the currently-selected method range, kept so it survives
+    // preview-filter changes.
+    QList<QTextEdit::ExtraSelection> m_methodSelection;
+
+    // NEW helpers
     void highlightAllMatches(const QString& text, bool caseSensitive);
     void findNext(bool backward = false);
+    void rebuildPreviewSelections();            // merges method + searc
 };
