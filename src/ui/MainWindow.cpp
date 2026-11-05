@@ -348,15 +348,22 @@ void MainWindow::highlightAllMatches(const QString& text, bool caseSensitive)
         }
     }
 
-    // No-match feedback: red text when the box is non-empty but nothing matched.
     const bool noMatch = !text.isEmpty() && m_matches.isEmpty();
     ui->txtFilterPreview->setStyleSheet(
         noMatch ? QStringLiteral("QLineEdit { color: red; }") : QString());
 
     rebuildPreviewSelections();
 
-    if (!m_matches.isEmpty())
+    // Kill any leftover built-in cursor selection from a previous search.
+    if (m_matches.isEmpty()) {
+        QTextCursor c = ui->txtPreview->textCursor();
+        c.clearSelection();
+        ui->txtPreview->setTextCursor(c);
+    } else {
         findNext(false);
+    }
+
+    updateFindCounter();
 }
 
 void MainWindow::findNext(bool backward)
@@ -373,10 +380,20 @@ void MainWindow::findNext(bool backward)
 
     rebuildPreviewSelections();
 
+    // Scroll to the current match, then immediately collapse the cursor
+    // so the QPlainTextEdit's built-in (blue) selection doesn't paint on
+    // top of our ExtraSelections.
     QTextCursor cur = m_matches[m_currentMatch];
     ui->txtPreview->setTextCursor(cur);
     ui->txtPreview->ensureCursorVisible();
+
+    QTextCursor collapsed(cur);
+    collapsed.clearSelection();                // drop the selection part
+    ui->txtPreview->setTextCursor(collapsed);
+
+    updateFindCounter();
 }
+
 void MainWindow::onApplyTrace() {
     if (m_currentFile.isEmpty()) return;
 
@@ -464,4 +481,17 @@ void MainWindow::onApplyTrace() {
 
     showFileInPreview(m_currentFile);
     onDetectMethods();
+}
+
+void MainWindow::updateFindCounter()
+{
+    const QString text = ui->txtFilterPreview->text();
+    if (text.isEmpty() || m_matches.isEmpty()) {
+        ui->lblFindCounter->clear();
+        return;
+    }
+    ui->lblFindCounter->setText(
+        QStringLiteral("%1 / %2")
+            .arg(m_currentMatch + 1)
+            .arg(m_matches.size()));
 }

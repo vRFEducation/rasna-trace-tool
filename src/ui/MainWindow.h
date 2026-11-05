@@ -28,7 +28,7 @@ private slots:
     void onDetectMethods();
     void onApplyTrace();
     void onFileSelected(const QModelIndex& idx);
-
+    void updateFindCounter();
 
 private:
     void loadProject(const QString& root);
