@@ -3,6 +3,8 @@
 #include <QMainWindow>
 #include <QFileSystemModel>
 #include <QTextEdit>
+#include <QTextCursor>          // for m_matches
+#include <QSortFilterProxyModel>
 #include "CppSyntaxHighlighter.h"
 #include "core/FunctionInfo.h"
 #include "core/TextEdit.h"
@@ -48,5 +50,17 @@ private:
     void runApplyTrace();
     void applyPlanToProject(const QVector<DiffPreviewDialog::FilePlan>& plans);
 
+    // NEW proxy models
+    QSortFilterProxyModel* m_projectProxy = nullptr;
+    QSortFilterProxyModel* m_fnProxy      = nullptr;
 
+    // NEW preview find state
+    QList<QTextCursor> m_matches;
+    int                m_currentMatch = -1;
+    QColor             m_highlightColor{255, 235, 59, 120};   // yellow
+    QColor             m_currentColor  {255, 152, 0, 180};    // orange
+
+    // NEW helper methods
+    void highlightAllMatches(const QString& text, bool caseSensitive);
+    void findNext(bool backward = false);
 };

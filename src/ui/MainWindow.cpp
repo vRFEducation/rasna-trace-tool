@@ -8,6 +8,7 @@
 
 #include <QFileDialog>
 #include <QStandardItemModel>
+#include <QSortFilterProxyModel>
 #include <QRegularExpression>
 #include <QFile>
 #include <QTextStream>
@@ -16,6 +17,7 @@
 #include <QFileInfo>
 #include <QTextEdit>
 #include <QTextBlock>
+#include <QShortcut>            // NEW
 
 #include <core/EditApplier.h>
 #include <core/EditPlanner.h>
@@ -26,28 +28,93 @@ MainWindow::MainWindow(QWidget* parent)
     ui->setupUi(this);
 
     m_highlighter = new CppSyntaxHighlighter(ui->txtPreview->document(),
-                                         CppSyntaxHighlighter::Mode::Cpp);
+                                             CppSyntaxHighlighter::Mode::Cpp);
+
+    // ------------------------------------------------------------------
+    // Project tree: keep QStandardItemModel as source, wrap in a proxy
+    // so the filter box can hide non-matching rows.
+    // ------------------------------------------------------------------
     m_projectModel = new QStandardItemModel(this);
     m_projectModel->setHorizontalHeaderLabels({ "File" });
-    ui->treeProject->setModel(m_projectModel);
+
+    m_projectProxy = new QSortFilterProxyModel(this);
+    m_projectProxy->setSourceModel(m_projectModel);
+    m_projectProxy->setRecursiveFilteringEnabled(true);
+    m_projectProxy->setFilterCaseSensitivity(Qt::CaseInsensitive);
+    m_projectProxy->setFilterKeyColumn(0);
+
+    ui->treeProject->setModel(m_projectProxy);
     ui->treeProject->header()->setStretchLastSection(true);
 
+    // ------------------------------------------------------------------
+    // Methods table: wrap FunctionTableModel in a proxy.
+    // ------------------------------------------------------------------
     m_fnModel = new FunctionTableModel(this);
-    ui->tblMethods->setModel(m_fnModel);
+
+    m_fnProxy = new QSortFilterProxyModel(this);
+    m_fnProxy->setSourceModel(m_fnModel);
+    m_fnProxy->setFilterCaseSensitivity(Qt::CaseInsensitive);
+m_fnProxy->setFilterKeyColumn(1);    // If your model doesn't expose a column enum, use the numeric index of
+    // the "name" column instead (check FunctionTableModel::headerData).
+
+    ui->tblMethods->setModel(m_fnProxy);
     ui->tblMethods->horizontalHeader()->setStretchLastSection(true);
     ui->tblMethods->setSelectionBehavior(QAbstractItemView::SelectRows);
 
+    // ------------------------------------------------------------------
+    // Connections
+    // ------------------------------------------------------------------
     connect(ui->btnOpenProject,   &QPushButton::clicked, this, &MainWindow::onOpenProject);
     connect(ui->btnDetectMethods, &QPushButton::clicked, this, &MainWindow::onDetectMethods);
     connect(ui->btnApplyTrace,    &QPushButton::clicked, this, &MainWindow::onApplyTrace);
+
     connect(ui->treeProject->selectionModel(), &QItemSelectionModel::currentChanged,
             this, &MainWindow::onFileSelected);
-    connect(ui->tblMethods->selectionModel(), &QItemSelectionModel::currentRowChanged,
-        this, [this](const QModelIndex& cur, const QModelIndex&) {
-            if (!cur.isValid()) return;
-            highlightMethodRange(m_fnModel->at(cur.row()));
-        });
 
+    // Row selection in the (proxy) table -> map back to source model.
+    connect(ui->tblMethods->selectionModel(), &QItemSelectionModel::currentRowChanged,
+            this, [this](const QModelIndex& cur, const QModelIndex&) {
+                if (!cur.isValid()) return;
+                const QModelIndex src = m_fnProxy->mapToSource(cur);
+                if (!src.isValid()) return;
+                highlightMethodRange(m_fnModel->at(src.row()));
+            });
+
+    // ---------------- Search box wiring (NEW) ----------------
+    connect(ui->txtFilterProject, &QLineEdit::textChanged,
+            this, [this](const QString& t){
+                m_projectProxy->setFilterFixedString(t);
+                ui->treeProject->expandAll();   // keep groups visible while filtering
+            });
+
+    connect(ui->txtFilterMethods, &QLineEdit::textChanged,
+            this, [this](const QString& t){
+                m_fnProxy->setFilterFixedString(t);
+            });
+
+    connect(ui->txtFilterPreview, &QLineEdit::textChanged,
+            this, [this](const QString& t){
+                highlightAllMatches(t, ui->chkCaseSensitive->isChecked());
+            });
+
+    connect(ui->chkCaseSensitive, &QCheckBox::toggled,
+            this, [this](bool){
+                highlightAllMatches(ui->txtFilterPreview->text(),
+                                    ui->chkCaseSensitive->isChecked());
+            });
+
+    connect(ui->btnFindNext, &QToolButton::clicked,
+            this, [this]{ findNext(false); });
+    connect(ui->btnFindPrev, &QToolButton::clicked,
+            this, [this]{ findNext(true); });
+    connect(ui->txtFilterPreview, &QLineEdit::returnPressed,
+            this, [this]{ findNext(false); });
+
+    auto* nextSc = new QShortcut(QKeySequence::FindNext,     this);
+    auto* prevSc = new QShortcut(QKeySequence::FindPrevious, this);
+    connect(nextSc, &QShortcut::activated, this, [this]{ findNext(false); });
+    connect(prevSc, &QShortcut::activated, this, [this]{ findNext(true); });
+    // ---------------------------------------------------------
 
     setStatus(QStringLiteral("Ready. Open a project to begin."));
 }
@@ -84,28 +151,39 @@ void MainWindow::loadProject(const QString& root) {
     addGroup("QML", r.qml);
 
     ui->treeProject->expandAll();
+
+    // Clear any active filter so the freshly loaded project is fully visible.
+    ui->txtFilterProject->clear();
+
     setStatus(QStringLiteral("Loaded %1 headers, %2 sources, %3 QML files.")
                   .arg(r.headers.size()).arg(r.sources.size()).arg(r.qml.size()));
 }
 
-void MainWindow::onFileSelected(const QModelIndex& idx) {
-    if (!idx.isValid()) return;
+void MainWindow::onFileSelected(const QModelIndex& proxyIdx) {
+    if (!proxyIdx.isValid()) return;
+    // Map from proxy to source before reading UserRole data.
+    const QModelIndex idx = m_projectProxy->mapToSource(proxyIdx);
     const QString path = idx.data(Qt::UserRole).toString();
-    if (path.isEmpty()) return;
+    if (path.isEmpty()) return;   // group header row
     m_currentFile = path;
     showFileInPreview(path);
     ui->btnDetectMethods->setEnabled(true);
     m_currentFunctions.clear();
     m_fnModel->setFunctions({});
     ui->btnApplyTrace->setEnabled(false);
+
+    // Clear stale matches from the previous file
+    m_matches.clear();
+    m_currentMatch = -1;
+    ui->txtFilterPreview->clear();
 }
 
 void MainWindow::showFileInPreview(const QString& path) {
     delete m_highlighter;
-const bool qml = path.endsWith(".qml", Qt::CaseInsensitive);
-m_highlighter = new CppSyntaxHighlighter(
-    ui->txtPreview->document(),
-    qml ? CppSyntaxHighlighter::Mode::Qml : CppSyntaxHighlighter::Mode::Cpp);
+    const bool qml = path.endsWith(".qml", Qt::CaseInsensitive);
+    m_highlighter = new CppSyntaxHighlighter(
+        ui->txtPreview->document(),
+        qml ? CppSyntaxHighlighter::Mode::Qml : CppSyntaxHighlighter::Mode::Cpp);
 
     QFile f(path);
     if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) return;
@@ -113,6 +191,12 @@ m_highlighter = new CppSyntaxHighlighter(
     ui->txtPreview->setPlainText(ts.readAll());
     ui->txtPreview->setExtraSelections({});
 
+    // Reset search state for the new file
+    m_matches.clear();
+    m_currentMatch = -1;
+    if (!ui->txtFilterPreview->text().isEmpty())
+        highlightAllMatches(ui->txtFilterPreview->text(),
+                            ui->chkCaseSensitive->isChecked());
 }
 
 void MainWindow::onDetectMethods() {
@@ -138,6 +222,7 @@ void MainWindow::onDetectMethods() {
     }
 
     m_currentFunctions = result;
+
     // ---- TEMP: export detected functions for inspection ----
     {
         QFile dump(QFileInfo(m_currentFile).absolutePath() + "/_detected.txt");
@@ -163,6 +248,7 @@ void MainWindow::onDetectMethods() {
             dump.close();
         }
     }
+
     populateMethodTable(result);
     ui->btnApplyTrace->setEnabled(!result.isEmpty());
 
@@ -185,7 +271,6 @@ void MainWindow::highlightMethodRange(const FunctionInfo& fn) {
     if (fn.openBraceLine > 0 && fn.closeBraceLine >= fn.openBraceLine) {
         QTextCursor cur(ui->txtPreview->document());
 
-        // Move to start of openBraceLine (1-based -> 0-based block)
         QTextBlock openBlock = ui->txtPreview->document()->findBlockByNumber(fn.openBraceLine - 1);
         QTextBlock closeBlock = ui->txtPreview->document()->findBlockByNumber(fn.closeBraceLine - 1);
 
@@ -196,11 +281,10 @@ void MainWindow::highlightMethodRange(const FunctionInfo& fn) {
 
             QTextEdit::ExtraSelection sel;
             sel.cursor = cur;
-            sel.format.setBackground(QColor(58, 110, 165, 60));   // light blue, translucent
+            sel.format.setBackground(QColor(58, 110, 165, 60));
             sel.format.setProperty(QTextFormat::FullWidthSelection, false);
             sels.append(sel);
 
-            // Bonus: keep a second selection on the signature line so it's easy to see the header
             QTextCursor sigCur(ui->txtPreview->document());
             QTextBlock sigBlock = ui->txtPreview->document()->findBlockByNumber(fn.signatureLine - 1);
             if (sigBlock.isValid()) {
@@ -213,23 +297,94 @@ void MainWindow::highlightMethodRange(const FunctionInfo& fn) {
                 sels.append(sigSel);
             }
 
-            // Scroll to the signature
             ui->txtPreview->setTextCursor(sigCur);
             ui->txtPreview->centerCursor();
+        }
+    }
+
+    // Preserve any preview search highlights that were active, by merging
+    // them in *before* the method range, so method selection stays on top.
+    // The search highlight list is rebuilt below from m_matches.
+    if (!m_matches.isEmpty()) {
+        for (int i = 0; i < m_matches.size(); ++i) {
+            QTextEdit::ExtraSelection sel;
+            sel.cursor  = m_matches[i];
+            sel.format.setBackground(i == m_currentMatch ? m_currentColor
+                                                         : m_highlightColor);
+            sels.prepend(sel);   // keep method highlight above search hits
         }
     }
 
     ui->txtPreview->setExtraSelections(sels);
 }
 
+// ====================================================================
+// NEW: find-in-preview implementation
+// ====================================================================
+void MainWindow::highlightAllMatches(const QString& text, bool caseSensitive)
+{
+    m_matches.clear();
+    m_currentMatch = -1;
+
+    auto* doc = ui->txtPreview->document();
+    QTextDocument::FindFlags flags;
+    if (caseSensitive) flags |= QTextDocument::FindCaseSensitively;
+
+    if (!text.isEmpty()) {
+        QTextCursor cursor(doc);
+        while (true) {
+            cursor = doc->find(text, cursor, flags);
+            if (cursor.isNull()) break;
+            m_matches.append(cursor);
+        }
+    }
+
+    // Apply the highlight layer (no scrolling yet)
+    QList<QTextEdit::ExtraSelection> selections;
+    for (const auto& c : m_matches) {
+        QTextEdit::ExtraSelection sel;
+        sel.cursor = c;
+        sel.format.setBackground(m_highlightColor);
+        selections.append(sel);
+    }
+    ui->txtPreview->setExtraSelections(selections);
+
+    if (!m_matches.isEmpty())
+        findNext(false);
+}
+
+void MainWindow::findNext(bool backward)
+{
+    if (m_matches.isEmpty()) return;
+
+    if (m_currentMatch < 0) {
+        m_currentMatch = backward ? m_matches.size() - 1 : 0;
+    } else {
+        m_currentMatch += backward ? -1 : 1;
+        if (m_currentMatch >= m_matches.size()) m_currentMatch = 0;
+        if (m_currentMatch < 0) m_currentMatch = m_matches.size() - 1;
+    }
+
+    QList<QTextEdit::ExtraSelection> selections;
+    for (int i = 0; i < m_matches.size(); ++i) {
+        QTextEdit::ExtraSelection sel;
+        sel.cursor = m_matches[i];
+        sel.format.setBackground(i == m_currentMatch ? m_currentColor
+                                                     : m_highlightColor);
+        selections.append(sel);
+    }
+    ui->txtPreview->setExtraSelections(selections);
+
+    QTextCursor cur = m_matches[m_currentMatch];
+    ui->txtPreview->setTextCursor(cur);
+    ui->txtPreview->ensureCursorVisible();
+}
 
 void MainWindow::onApplyTrace() {
     if (m_currentFile.isEmpty()) return;
 
     const QString suffix = QFileInfo(m_currentFile).suffix().toLower();
 
-    // Phase-1: we plan for the current file (headers or cpp) and, if it's
-    // a cpp, also the paired header for in-header bodies.
     QStringList filesToPlan;
     filesToPlan << m_currentFile;
     if (suffix == "cpp" || suffix == "cc" || suffix == "cxx") {
@@ -239,7 +394,7 @@ void MainWindow::onApplyTrace() {
     }
 
     QVector<DiffPreviewDialog::FilePlan> plans;
-    EditPlanner::Options opts;   // defaults are fine
+    EditPlanner::Options opts;
 
     for (const QString& file : filesToPlan) {
         QFile f(file);
@@ -249,12 +404,11 @@ void MainWindow::onApplyTrace() {
         while (!ts.atEnd()) lines << ts.readLine();
         f.close();
 
-        // parse
         QVector<FunctionInfo> fns;
         const QString sfx = QFileInfo(file).suffix().toLower();
         if (sfx == "qml") {
-                QmlFunctionFinder finder;
-                fns = finder.findFunctions(file);
+            QmlFunctionFinder finder;
+            fns = finder.findFunctions(file);
         } else if (sfx == "h" || sfx == "hpp" || sfx == "hxx") {
             HeaderParser parser;
             fns = parser.parseFile(file);
@@ -281,7 +435,7 @@ void MainWindow::onApplyTrace() {
 
     if (plans.isEmpty()) {
         QMessageBox::information(this, "Nothing to do",
-            "No functions require instrumentation in this file.");
+                                 "No functions require instrumentation in this file.");
         return;
     }
 
@@ -304,16 +458,13 @@ void MainWindow::onApplyTrace() {
 
     if (failCount == 0) {
         QMessageBox::information(this, "Done",
-            QString("Instrumented %1 file(s).").arg(okCount));
+                                 QString("Instrumented %1 file(s).").arg(okCount));
     } else {
         QMessageBox::warning(this, "Partially applied",
-            QString("Succeeded: %1\nFailed: %2\n\n%3")
-                .arg(okCount).arg(failCount).arg(errors.join('\n')));
+                             QString("Succeeded: %1\nFailed: %2\n\n%3")
+                                 .arg(okCount).arg(failCount).arg(errors.join('\n')));
     }
 
-    // Refresh preview of the currently open file
     showFileInPreview(m_currentFile);
     onDetectMethods();
 }
-
-

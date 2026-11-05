@@ -17,18 +17,79 @@
     <item>
      <widget class="QSplitter" name="splitter">
       <property name="orientation"><enum>Qt::Horizontal</enum></property>
+
+      <!-- ===================== PROJECT PANEL ===================== -->
       <widget class="QGroupBox" name="grpProject">
        <property name="title"><string>Project</string></property>
-       <layout class="QVBoxLayout"><item><widget class="QTreeView" name="treeProject"/></item></layout>
+       <layout class="QVBoxLayout" name="projectLayout">
+        <item>
+         <layout class="QHBoxLayout" name="projectSearchRow">
+          <item>
+           <widget class="QLineEdit" name="txtFilterProject">
+            <property name="placeholderText"><string>Filter files…</string></property>
+            <property name="clearButtonEnabled"><bool>true</bool></property>
+           </widget>
+          </item>
+         </layout>
+        </item>
+        <item><widget class="QTreeView" name="treeProject"/></item>
+       </layout>
       </widget>
+
+      <!-- ===================== PREVIEW PANEL ===================== -->
       <widget class="QGroupBox" name="grpPreview">
        <property name="title"><string>Preview</string></property>
-       <layout class="QVBoxLayout"><item><widget class="QPlainTextEdit" name="txtPreview"><property name="readOnly"><bool>true</bool></property></widget></item></layout>
+       <layout class="QVBoxLayout" name="previewLayout">
+        <item>
+         <layout class="QHBoxLayout" name="previewSearchRow">
+          <item>
+           <widget class="QLineEdit" name="txtFilterPreview">
+            <property name="placeholderText"><string>Find in file…</string></property>
+            <property name="clearButtonEnabled"><bool>true</bool></property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QToolButton" name="btnFindPrev">
+            <property name="text"><string>◀</string></property>
+            <property name="toolTip"><string>Find previous (Shift+F3)</string></property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QToolButton" name="btnFindNext">
+            <property name="text"><string>▶</string></property>
+            <property name="toolTip"><string>Find next (F3)</string></property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QCheckBox" name="chkCaseSensitive">
+            <property name="text"><string>Aa</string></property>
+            <property name="toolTip"><string>Case sensitive</string></property>
+           </widget>
+          </item>
+         </layout>
+        </item>
+        <item><widget class="QPlainTextEdit" name="txtPreview"><property name="readOnly"><bool>true</bool></property></widget></item>
+       </layout>
       </widget>
+
+      <!-- ===================== METHODS PANEL ===================== -->
       <widget class="QGroupBox" name="grpMethods">
        <property name="title"><string>Methods</string></property>
-       <layout class="QVBoxLayout"><item><widget class="QTableView" name="tblMethods"/></item></layout>
+       <layout class="QVBoxLayout" name="methodsLayout">
+        <item>
+         <layout class="QHBoxLayout" name="methodsSearchRow">
+          <item>
+           <widget class="QLineEdit" name="txtFilterMethods">
+            <property name="placeholderText"><string>Filter methods…</string></property>
+            <property name="clearButtonEnabled"><bool>true</bool></property>
+           </widget>
+          </item>
+         </layout>
+        </item>
+        <item><widget class="QTableView" name="tblMethods"/></item>
+       </layout>
       </widget>
+
      </widget>
     </item>
    </layout>
